@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 )
 
 type lookupRequest struct {
@@ -19,11 +20,21 @@ type lookupRequest struct {
 	SourceAddr *net.UDPAddr
 }
 
+type cacheEntry struct {
+	Data      []byte
+	CreatedAt time.Time
+}
+
 var (
 	bindAddr   string
 	socksAddr  string
 	resolvFile string
 	debug      bool
+	cache      bool
+)
+
+var (
+	cacheStorage = make(map[string]cacheEntry)
 )
 
 func init() {
@@ -31,6 +42,7 @@ func init() {
 	flag.StringVar(&socksAddr, "s", "127.0.0.1:8080", "Use this SOCKS connection, default to localhost:8080")
 	flag.StringVar(&resolvFile, "r", "./resolv.conf", "Use dns listed in this file, default to ./resolv.conf")
 	flag.BoolVar(&debug, "d", false, "Set debug mode")
+	flag.BoolVar(&cache, "c", false, "Turn on query caching")
 }
 
 func main() {
@@ -77,9 +89,15 @@ func bindDNS(addr, socksaddr string, list []string) {
 			log_err("can not read request: " + err.Error())
 			return
 		}
-		log_raw("rdata", rdata[:rlen])
+		log_raw("request", rdata[:rlen])
 
 		go func(c *net.UDPConn, data []byte, target *net.UDPAddr) {
+			if cached(data) {
+				log_raw("cache", "HIT")
+				sendFromCache(c, data, target)
+				return
+			}
+			log_raw("cache", "MISS")
 			connectSOCKS(socksaddr, &lookupRequest{
 				Cconn:      c,
 				Data:       data,
@@ -93,7 +111,7 @@ func bindDNS(addr, socksaddr string, list []string) {
 func connectSOCKS(addr string, request *lookupRequest) {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
-		log_err("can not connect to socks server: " + err.Error())
+		log_err("socks server: " + err.Error())
 		return
 	}
 	defer conn.Close()
@@ -104,7 +122,7 @@ func connectSOCKS(addr string, request *lookupRequest) {
 	rsp := make([]byte, 512)
 	rlen, err := conn.Read(rsp)
 	if err != nil {
-		log_err("can not read handshake response: " + err.Error())
+		log_err("handshake response: " + err.Error())
 		return
 	}
 	log_raw("handshake", rsp[:rlen])
@@ -118,14 +136,14 @@ func connectSOCKS(addr string, request *lookupRequest) {
 	log_raw("header", bbuff.Bytes()[:10])
 	_, err = conn.Write(bbuff.Bytes()[:10])
 	if err != nil {
-		log_err("can not send header: " + err.Error())
+		log_err("send header: " + err.Error())
 		return
 	}
 
 	rsp = make([]byte, 512)
 	rlen, err = conn.Read(rsp)
 	if err != nil {
-		log_err("can not read header response: " + err.Error())
+		log_err("header response: " + err.Error())
 		return
 	}
 	log_raw("rsp", rsp[:rlen])
@@ -134,7 +152,7 @@ func connectSOCKS(addr string, request *lookupRequest) {
 	// (TCP doesn't need this)
 	sbuff := new(bytes.Buffer)
 	if err = binary.Write(sbuff, binary.BigEndian, int16(len(request.Data))); err != nil {
-		log_err("can not specify packet length: " + err.Error())
+		log_err("packet length: " + err.Error())
 		return
 	}
 	sbuff.Write(request.Data)
@@ -142,14 +160,14 @@ func connectSOCKS(addr string, request *lookupRequest) {
 	log_raw("query", sbuff.Bytes())
 	_, err = conn.Write(sbuff.Bytes())
 	if err != nil {
-		log_err("can not send query: " + err.Error())
+		log_err("send query: " + err.Error())
 		return
 	}
 
 	rsp = make([]byte, 2048)
 	rlen, err = conn.Read(rsp)
 	if err != nil {
-		log_err("can not read query response: " + err.Error())
+		log_err("query response: " + err.Error())
 		return
 	}
 
@@ -157,8 +175,28 @@ func connectSOCKS(addr string, request *lookupRequest) {
 	log_raw("rsp", rsp[2:rlen])
 	_, err = request.Cconn.WriteToUDP(rsp[2:rlen], request.SourceAddr)
 	if err != nil {
-		log_err("can not forward query response: " + err.Error())
+		log_err("forward response: " + err.Error())
 	}
+
+	setCache(request.Data, rsp[2:rlen])
+}
+
+func cached(q []byte) bool {
+	e, exists := cacheStorage[string(q[13:])]
+	return exists && (time.Since(e.CreatedAt) <= (30 * time.Second))
+}
+
+func setCache(q, data []byte) {
+	// only match q from the 13th character
+	cacheStorage[string(q[13:])] = cacheEntry{
+		Data:      data,
+		CreatedAt: time.Now(),
+	}
+}
+
+func sendFromCache(c *net.UDPConn, q []byte, target *net.UDPAddr) {
+	entry, _ := cacheStorage[string(q[13:])]
+	c.WriteToUDP(entry.Data, target)
 }
 
 func log_err(msg string) {
@@ -170,6 +208,6 @@ func log_info(msg string) {
 
 func log_raw(label string, msg interface{}) {
 	if debug {
-		fmt.Printf("%s> %q\n", label, msg)
+		fmt.Printf("[*] <%s> %q\n", label, msg)
 	}
 }
