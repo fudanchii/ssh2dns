@@ -25,6 +25,10 @@ type cacheEntry struct {
 	CreatedAt time.Time
 }
 
+const (
+	CacheTTL = 7200 // second
+)
+
 var (
 	bindAddr   string
 	socksAddr  string
@@ -183,7 +187,7 @@ func connectSOCKS(addr string, request *lookupRequest) {
 
 func cached(q []byte) bool {
 	e, exists := cacheStorage[string(q[13:])]
-	return exists && (time.Since(e.CreatedAt) <= (30 * time.Second))
+	return cache && exists && (time.Since(e.CreatedAt) <= CacheTTL*time.Second)
 }
 
 func setCache(q, data []byte) {
