@@ -97,21 +97,24 @@ func connectSOCKS(addr string) (chan *lookupRequest, error) {
 			bbuff := new(bytes.Buffer)
 
 			bbuff.Write([]byte{0x05, 0x01, 0x00, 0x01})
-			bbuff.Write(net.ParseIP(request.DNS))
-			bbuff.Write([]byte{0x00, 53})
+			bbuff.Write(net.ParseIP(request.DNS).To4())
+			bbuff.Write([]byte{0x00, 0x35})
 
-			_, err := conn.Write(bbuff.Bytes())
+			log_raw("bbuff", bbuff.Bytes()[:10])
+			_, err := conn.Write(bbuff.Bytes()[:10])
 			if err != nil {
 				log_err("fail to send header: " + err.Error())
 				continue
 			}
 
 			rsp := make([]byte, 512)
-			_, err = conn.Read(rsp)
+			rlen, err := conn.Read(rsp)
 			if err != nil {
 				log_err("fail reading header response: " + err.Error())
 				continue
 			}
+
+			log_raw("header", rsp[:rlen])
 
 			_, err = conn.Write(request.Data)
 			if err != nil {
@@ -120,14 +123,14 @@ func connectSOCKS(addr string) (chan *lookupRequest, error) {
 			}
 
 			rsp = make([]byte, 2048)
-			_, err = conn.Read(rsp)
+			rlen, err = conn.Read(rsp)
 			if err != nil {
 				log_err("fail reading lookup response: " + err.Error())
 				continue
 			}
 
-			log_raw("lookup", rsp)
-			_, err = request.Cconn.Write(rsp)
+			log_raw("lookup", rsp[:rlen])
+			_, err = request.Cconn.Write(rsp[:rlen])
 			if err != nil {
 				log_err("fail to send-back lookup response: " + err.Error())
 			}
@@ -145,6 +148,8 @@ func bindDNS(addr string, sockschan chan *lookupRequest, list []string) (chan er
 	}
 	defer L.Close()
 
+	log_info("start accepting connection...")
+
 	for {
 		conn, err := L.Accept()
 		if err != nil {
@@ -152,15 +157,17 @@ func bindDNS(addr string, sockschan chan *lookupRequest, list []string) (chan er
 			continue
 		}
 		go func(c net.Conn) {
+			log_info("read data...")
 			rdata := make([]byte, 2048)
-			_, err := conn.Read(rdata)
+			rlen, err := conn.Read(rdata)
 			if err != nil {
 				log_err("can not read request: " + err.Error())
 				return
 			}
+			log_raw("rdata", rdata[:rlen])
 			sockschan <- &lookupRequest{
 				Cconn: conn,
-				Data:  rdata,
+				Data:  rdata[:rlen],
 				DNS:   "8.8.8.8",
 			}
 		}(conn)
