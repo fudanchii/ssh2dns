@@ -154,8 +154,8 @@ func connectSOCKS(addr string, request *lookupRequest) {
 	}
 
 	// Send back to UDP, do not want the length
-	log_raw("rsp", rsp[2:rlen-2])
-	_, err = request.Cconn.WriteToUDP(rsp[2:rlen-2], request.SourceAddr)
+	log_raw("rsp", rsp[2:rlen])
+	_, err = request.Cconn.WriteToUDP(rsp[2:rlen], request.SourceAddr)
 	if err != nil {
 		log_err("can not forward query response: " + err.Error())
 	}
