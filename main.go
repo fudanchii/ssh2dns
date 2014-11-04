@@ -72,19 +72,6 @@ func readResolvConf(rfile string) ([]string, error) {
 }
 
 func connectSOCKS(addr string) (chan *lookupRequest, error) {
-	_rsp := []byte{}
-
-	conn, err := net.Dial("tcp", addr)
-	if err != nil {
-		return nil, err
-	}
-
-	// First bow
-	conn.Write([]byte{0x5, 0x01, 0x00})
-
-	_, err = conn.Read(_rsp)
-	log_raw("hs", _rsp)
-
 	reqChan := make(chan *lookupRequest, 512)
 	go func() {
 		for {
@@ -94,6 +81,18 @@ func connectSOCKS(addr string) (chan *lookupRequest, error) {
 				return
 			}
 
+			conn, err := net.Dial("tcp", addr)
+			if err != nil {
+				return
+			}
+
+			rsp := make([]byte, 512)
+			// First bow
+			conn.Write([]byte{0x5, 0x01, 0x00})
+
+			rlen, err := conn.Read(rsp)
+			log_raw("hs", rsp[:rlen])
+
 			bbuff := new(bytes.Buffer)
 
 			bbuff.Write([]byte{0x05, 0x01, 0x00, 0x01})
@@ -101,32 +100,32 @@ func connectSOCKS(addr string) (chan *lookupRequest, error) {
 			bbuff.Write([]byte{0x00, 0x35})
 
 			log_raw("bbuff", bbuff.Bytes()[:10])
-			_, err := conn.Write(bbuff.Bytes()[:10])
+			_, err = conn.Write(bbuff.Bytes()[:10])
 			if err != nil {
 				log_err("fail to send header: " + err.Error())
-				continue
+				goto bottomloop
 			}
 
-			rsp := make([]byte, 512)
-			rlen, err := conn.Read(rsp)
+			rsp = make([]byte, 512)
+			rlen, err = conn.Read(rsp)
 			if err != nil {
 				log_err("fail reading header response: " + err.Error())
-				continue
+				goto bottomloop
 			}
 
 			log_raw("header", rsp[:rlen])
-
+			log_raw("query", request.Data)
 			_, err = conn.Write(request.Data)
 			if err != nil {
 				log_err("fail to send data: " + err.Error())
-				continue
+				goto bottomloop
 			}
 
 			rsp = make([]byte, 2048)
 			rlen, err = conn.Read(rsp)
 			if err != nil {
 				log_err("fail reading lookup response: " + err.Error())
-				continue
+				goto bottomloop
 			}
 
 			log_raw("lookup", rsp[:rlen])
@@ -134,7 +133,9 @@ func connectSOCKS(addr string) (chan *lookupRequest, error) {
 			if err != nil {
 				log_err("fail to send-back lookup response: " + err.Error())
 			}
+		bottomloop:
 			request.Cconn.Close()
+			conn.Close()
 		}
 	}()
 
