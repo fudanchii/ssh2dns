@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"net"
 	"os"
 	"strings"
@@ -34,6 +35,8 @@ func init() {
 
 func main() {
 	flag.Parse()
+
+	rand.Seed(666)
 
 	// open resolver file, create dns list
 	DNSlist, err := readResolvConf(resolvFile)
@@ -159,7 +162,7 @@ func bindDNS(addr, socksaddr string, list []string) {
 			if err = connectSOCKS(socksaddr, &lookupRequest{
 				Cconn:      c,
 				Data:       data,
-				DNS:        "8.8.8.8",
+				DNS:        list[rand.Intn(len(list))],
 				SourceAddr: target,
 			}); err != nil {
 				log_err(err.Error())
