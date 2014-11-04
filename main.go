@@ -20,12 +20,14 @@ var (
 	bindAddr   string
 	socksAddr  string
 	resolvFile string
+	debug      bool
 )
 
 func init() {
 	flag.StringVar(&bindAddr, "b", "127.0.0.1:53", "Bind to address, default to localhost:53")
 	flag.StringVar(&socksAddr, "s", "127.0.0.1:8080", "Use this SOCKS connection, default to localhost:8080")
 	flag.StringVar(&resolvFile, "r", "./resolv.conf", "Use dns listed in this file, default to ./resolv.conf")
+	flag.BoolVar(&debug, "D", false, "Set debug mode")
 }
 
 func main() {
@@ -59,7 +61,9 @@ func log_info(msg string) {
 }
 
 func log_raw(label string, msg interface{}) {
-	fmt.Printf("%s> %q\n", label, msg)
+	if debug {
+		fmt.Printf("%s> %q\n", label, msg)
+	}
 }
 
 func readResolvConf(rfile string) ([]string, error) {
@@ -158,7 +162,6 @@ func bindDNS(addr string, sockschan chan *lookupRequest, list []string) (chan er
 			continue
 		}
 		go func(c net.Conn) {
-			log_info("read data...")
 			rdata := make([]byte, 2048)
 			rlen, err := conn.Read(rdata)
 			if err != nil {
