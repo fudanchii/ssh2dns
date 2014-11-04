@@ -2,9 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"flag"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"net"
 	"os"
@@ -12,9 +12,10 @@ import (
 )
 
 type lookupRequest struct {
-	Cconn net.Conn
-	Data  []byte
-	DNS   string
+	Cconn      *net.UDPConn
+	Data       []byte
+	DNS        string
+	SourceAddr *net.UDPAddr
 }
 
 var (
@@ -68,8 +69,6 @@ func readResolvConf(rfile string) ([]string, error) {
 }
 
 func connectSOCKS(addr string, request *lookupRequest) error {
-	defer request.Cconn.Close()
-
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return err
@@ -104,19 +103,40 @@ func connectSOCKS(addr string, request *lookupRequest) error {
 	}
 	log_raw("rsp", rsp[:rlen])
 
-	log_raw("query", request.Data)
-	_, err = conn.Write(request.Data)
-	if err != nil {
+	sbuff := new(bytes.Buffer)
+	if err = binary.Write(sbuff, binary.BigEndian, int16(len(request.Data))); err != nil {
 		return err
 	}
 
-	_, err = io.Copy(request.Cconn, conn)
+	sbuff.Write(request.Data)
+	log_raw("query", sbuff.Bytes())
+	_, err = conn.Write(sbuff.Bytes())
+	if err != nil {
+		log_err("can't write")
+		return err
+	}
+
+	rsp = make([]byte, 2048)
+	rlen, err = conn.Read(rsp)
+	if err != nil {
+		log_err("can't read")
+		return err
+	}
+	log_raw("rsp", rsp[2:rlen-2])
+
+	_, err = request.Cconn.WriteToUDP(rsp[2:rlen-2], request.SourceAddr)
 
 	return err
 }
 
 func bindDNS(addr, socksaddr string, list []string) {
-	L, err := net.Listen("tcp", addr)
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		log_err(err.Error())
+		return
+	}
+
+	L, err := net.ListenUDP("udp", udpAddr)
 	if err != nil {
 		log_err(err.Error())
 		return
@@ -126,27 +146,24 @@ func bindDNS(addr, socksaddr string, list []string) {
 	log_info("start accepting connection...")
 
 	for {
-		conn, err := L.Accept()
+		rdata := make([]byte, 2048)
+		rlen, rAddr, err := L.ReadFromUDP(rdata)
 		if err != nil {
-			log_err("can't accept connection: " + err.Error())
-			continue
+			log_err("can not read request: " + err.Error())
+			return
 		}
-		go func(c net.Conn) {
-			rdata := make([]byte, 2048)
-			rlen, err := conn.Read(rdata)
-			if err != nil {
-				log_err("can not read request: " + err.Error())
-				return
-			}
-			log_raw("rdata", rdata[:rlen])
+		log_raw("rdata", rdata[:rlen])
+
+		go func(c *net.UDPConn, data []byte, target *net.UDPAddr) {
 
 			if err = connectSOCKS(socksaddr, &lookupRequest{
-				Cconn: conn,
-				Data:  rdata[:rlen],
-				DNS:   "8.8.8.8",
+				Cconn:      c,
+				Data:       data,
+				DNS:        "8.8.8.8",
+				SourceAddr: target,
 			}); err != nil {
 				log_err(err.Error())
 			}
-		}(conn)
+		}(L, rdata[:rlen], rAddr)
 	}
 }
