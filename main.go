@@ -57,71 +57,6 @@ func readResolvConf(rfile string) ([]string, error) {
 	return strings.Split(string(content), "\n"), nil
 }
 
-func connectSOCKS(addr string, request *lookupRequest) error {
-	conn, err := net.Dial("tcp", addr)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	// First bow
-	conn.Write([]byte{0x05, 0x01, 0x00})
-
-	rsp := make([]byte, 512)
-	rlen, err := conn.Read(rsp)
-	if err != nil {
-		return err
-	}
-	log_raw("handshake", rsp[:rlen])
-
-	// Send SOCKS header, connect to this IP on this port
-	bbuff := new(bytes.Buffer)
-	bbuff.Write([]byte{0x05, 0x01, 0x00, 0x01})
-	bbuff.Write(net.ParseIP(request.DNS).To4())
-	bbuff.Write([]byte{0x00, 53})
-
-	log_raw("header", bbuff.Bytes()[:10])
-	_, err = conn.Write(bbuff.Bytes()[:10])
-	if err != nil {
-		return err
-	}
-
-	rsp = make([]byte, 512)
-	rlen, err = conn.Read(rsp)
-	if err != nil {
-		return err
-	}
-	log_raw("rsp", rsp[:rlen])
-
-	// Need to prepend query length since we get this from UDP
-	// (TCP doesn't need this)
-	sbuff := new(bytes.Buffer)
-	if err = binary.Write(sbuff, binary.BigEndian, int16(len(request.Data))); err != nil {
-		return err
-	}
-	sbuff.Write(request.Data)
-
-	log_raw("query", sbuff.Bytes())
-	_, err = conn.Write(sbuff.Bytes())
-	if err != nil {
-		log_err("can't write")
-		return err
-	}
-
-	rsp = make([]byte, 2048)
-	rlen, err = conn.Read(rsp)
-	if err != nil {
-		log_err("can't read")
-		return err
-	}
-
-	// Send back to UDP, do not want the length
-	log_raw("rsp", rsp[2:rlen-2])
-	_, err = request.Cconn.WriteToUDP(rsp[2:rlen-2], request.SourceAddr)
-
-	return err
-}
-
 func bindDNS(addr, socksaddr string, list []string) {
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
@@ -145,15 +80,84 @@ func bindDNS(addr, socksaddr string, list []string) {
 		log_raw("rdata", rdata[:rlen])
 
 		go func(c *net.UDPConn, data []byte, target *net.UDPAddr) {
-			if err = connectSOCKS(socksaddr, &lookupRequest{
+			connectSOCKS(socksaddr, &lookupRequest{
 				Cconn:      c,
 				Data:       data,
 				DNS:        list[rand.Intn(len(list))],
 				SourceAddr: target,
-			}); err != nil {
-				log_err(err.Error())
-			}
+			})
 		}(L, rdata[:rlen], rAddr)
+	}
+}
+
+func connectSOCKS(addr string, request *lookupRequest) {
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		log_err("can not connect to socks server: " + err.Error())
+		return
+	}
+	defer conn.Close()
+
+	// First bow
+	conn.Write([]byte{0x05, 0x01, 0x00})
+
+	rsp := make([]byte, 512)
+	rlen, err := conn.Read(rsp)
+	if err != nil {
+		log_err("can not read handshake response: " + err.Error())
+		return
+	}
+	log_raw("handshake", rsp[:rlen])
+
+	// Send SOCKS header, connect to this IP on this port
+	bbuff := new(bytes.Buffer)
+	bbuff.Write([]byte{0x05, 0x01, 0x00, 0x01})
+	bbuff.Write(net.ParseIP(request.DNS).To4())
+	bbuff.Write([]byte{0x00, 53})
+
+	log_raw("header", bbuff.Bytes()[:10])
+	_, err = conn.Write(bbuff.Bytes()[:10])
+	if err != nil {
+		log_err("can not send header: " + err.Error())
+		return
+	}
+
+	rsp = make([]byte, 512)
+	rlen, err = conn.Read(rsp)
+	if err != nil {
+		log_err("can not read header response: " + err.Error())
+		return
+	}
+	log_raw("rsp", rsp[:rlen])
+
+	// Need to prepend query length since we get this from UDP
+	// (TCP doesn't need this)
+	sbuff := new(bytes.Buffer)
+	if err = binary.Write(sbuff, binary.BigEndian, int16(len(request.Data))); err != nil {
+		log_err("can not specify packet length: " + err.Error())
+		return
+	}
+	sbuff.Write(request.Data)
+
+	log_raw("query", sbuff.Bytes())
+	_, err = conn.Write(sbuff.Bytes())
+	if err != nil {
+		log_err("can not send query: " + err.Error())
+		return
+	}
+
+	rsp = make([]byte, 2048)
+	rlen, err = conn.Read(rsp)
+	if err != nil {
+		log_err("can not read query response: " + err.Error())
+		return
+	}
+
+	// Send back to UDP, do not want the length
+	log_raw("rsp", rsp[2:rlen-2])
+	_, err = request.Cconn.WriteToUDP(rsp[2:rlen-2], request.SourceAddr)
+	if err != nil {
+		log_err("can not forward query response: " + err.Error())
 	}
 }
 
