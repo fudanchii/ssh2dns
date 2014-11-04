@@ -65,7 +65,7 @@ func connectSOCKS(addr string, request *lookupRequest) error {
 	defer conn.Close()
 
 	// First bow
-	conn.Write([]byte{0x5, 0x01, 0x00})
+	conn.Write([]byte{0x05, 0x01, 0x00})
 
 	rsp := make([]byte, 512)
 	rlen, err := conn.Read(rsp)
