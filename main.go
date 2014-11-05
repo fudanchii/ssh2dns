@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -39,6 +40,7 @@ var (
 
 var (
 	cacheStorage = make(map[string]cacheEntry)
+	cacheMutex   = new(sync.Mutex)
 )
 
 func init() {
@@ -96,9 +98,8 @@ func bindDNS(addr, socksaddr string, list []string) {
 		log_raw("request", rdata[:rlen])
 
 		go func(c *net.UDPConn, data []byte, target *net.UDPAddr) {
-			if cached(data) {
+			if  sendFromCache(c, data, target) {
 				log_raw("cache", "HIT")
-				sendFromCache(c, data, target)
 				return
 			}
 			log_raw("cache", "MISS")
@@ -182,25 +183,37 @@ func connectSOCKS(addr string, request *lookupRequest) {
 		log_err("forward response: " + err.Error())
 	}
 
-	setCache(request.Data, rsp[2:rlen])
-}
-
-func cached(q []byte) bool {
-	e, exists := cacheStorage[string(q[13:])]
-	return cache && exists && (time.Since(e.CreatedAt) <= CacheTTL*time.Second)
-}
-
-func setCache(q, data []byte) {
-	// only match q from the 13th character
-	cacheStorage[string(q[13:])] = cacheEntry{
-		Data:      data,
-		CreatedAt: time.Now(),
+	if cache {
+		setCache(request.Data, rsp[2:rlen])
 	}
 }
 
-func sendFromCache(c *net.UDPConn, q []byte, target *net.UDPAddr) {
-	entry, _ := cacheStorage[string(q[13:])]
-	c.WriteToUDP(entry.Data, target)
+func setCache(q, data []byte) {
+	cacheMutex.Lock()
+
+	// only match q from the 13th character
+	cacheStorage[string(q[13:])] = cacheEntry{
+		Data:      data[2:],
+		CreatedAt: time.Now(),
+	}
+
+	cacheMutex.Unlock()
+}
+
+func sendFromCache(c *net.UDPConn, q []byte, target *net.UDPAddr) bool {
+	cacheMutex.Lock()
+	entry, exists := cacheStorage[string(q[13:])]
+	cacheMutex.Unlock()
+
+	if cache && exists && (time.Since(entry.CreatedAt) <= CacheTTL*time.Second) {
+		answer := new(bytes.Buffer)
+		answer.Write(q[:2])
+		answer.Write(entry.Data)
+		c.WriteToUDP(answer.Bytes(), target)
+		return true
+	}
+
+	return false
 }
 
 func log_err(msg string) {
