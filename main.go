@@ -60,24 +60,21 @@ func main() {
 	rand.Seed(666)
 
 	// open resolver file, create dns list
-	DNSlist, err := readResolvConf(resolvFile)
-	if err != nil {
-		log_err("can't read resolv.conf: " + err.Error())
-		log_err("will use 8.8.8.8 and 8.8.4.4 as default resolver")
-		DNSlist = append(DNSlist, "8.8.8.8", "8.8.4.4")
-	}
+	DNSlist := readResolvConf(resolvFile)
 
 	// bind to dns port and wait
 	bindDNS(bindAddr, socksAddr, DNSlist)
 }
 
-func readResolvConf(rfile string) ([]string, error) {
+func readResolvConf(rfile string) []string {
 	content, err := ioutil.ReadFile(rfile)
-	content = bytes.TrimSpace(content)
 	if err != nil {
-		return []string{}, err
+		log_err("can't read resolv.conf: " + err.Error())
+		log_err("will use 8.8.8.8 and 8.8.4.4 as default resolver")
+		return []string{"8.8.8.8", "8.8.4.4"}
 	}
-	return strings.Split(string(content), "\n"), nil
+	content = bytes.TrimSpace(content)
+	return strings.Split(string(content), "\n")
 }
 
 func bindDNS(addr, socksaddr string, list []string) {
