@@ -228,6 +228,20 @@ func sendFromCache(c *net.UDPConn, q []byte, target *net.UDPAddr) bool {
 }
 
 func setPrivilege(tUser string) error {
+	if len(tUser) == 0 {
+		return nil
+	}
+
+	current, err := user.Current()
+	if err != nil {
+		return err
+	}
+
+	if current.Uid != "0" {
+		log_info("not a root, will keep running as " + current.Username)
+		return nil
+	}
+
 	ug := strings.SplitN(tUser, ":", 2)
 	nUser, err := user.Lookup(ug[0])
 	if err != nil {
