@@ -8,9 +8,11 @@ import (
 	"io/ioutil"
 	"math/rand"
 	"net"
-	"os"
+	"os/user"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -34,6 +36,7 @@ var (
 	bindAddr   string
 	socksAddr  string
 	resolvFile string
+	userSet    string
 	debug      bool
 	cache      bool
 )
@@ -47,6 +50,7 @@ func init() {
 	flag.StringVar(&bindAddr, "b", "127.0.0.1:53", "Bind to address, default to localhost:53")
 	flag.StringVar(&socksAddr, "s", "127.0.0.1:8080", "Use this SOCKS connection, default to localhost:8080")
 	flag.StringVar(&resolvFile, "r", "./resolv.conf", "Use dns listed in this file, default to ./resolv.conf")
+	flag.StringVar(&userSet, "u", "", "Set uid to this user")
 	flag.BoolVar(&debug, "d", false, "Set debug mode")
 	flag.BoolVar(&cache, "c", false, "Turn on query caching")
 }
@@ -59,7 +63,8 @@ func main() {
 	DNSlist, err := readResolvConf(resolvFile)
 	if err != nil {
 		log_err("can't read resolv.conf: " + err.Error())
-		os.Exit(1)
+		log_err("will use 8.8.8.8 and 8.8.4.4 as default resolver")
+		DNSlist = append(DNSlist, "8.8.8.8", "8.8.4.4")
 	}
 
 	// bind to dns port and wait
@@ -70,7 +75,7 @@ func readResolvConf(rfile string) ([]string, error) {
 	content, err := ioutil.ReadFile(rfile)
 	content = bytes.TrimSpace(content)
 	if err != nil {
-		return nil, err
+		return []string{}, err
 	}
 	return strings.Split(string(content), "\n"), nil
 }
@@ -87,6 +92,12 @@ func bindDNS(addr, socksaddr string, list []string) {
 		return
 	}
 	defer L.Close()
+
+	if err = setPrivilege(userSet); err != nil {
+		log_err("set privilege: " + err.Error())
+		return
+	}
+
 	log_info("start accepting connection...")
 	for {
 		rdata := make([]byte, 2048)
@@ -98,7 +109,7 @@ func bindDNS(addr, socksaddr string, list []string) {
 		log_raw("request", rdata[:rlen])
 
 		go func(c *net.UDPConn, data []byte, target *net.UDPAddr) {
-			if  sendFromCache(c, data, target) {
+			if sendFromCache(c, data, target) {
 				log_raw("cache", "HIT")
 				return
 			}
@@ -214,6 +225,20 @@ func sendFromCache(c *net.UDPConn, q []byte, target *net.UDPAddr) bool {
 	}
 
 	return false
+}
+
+func setPrivilege(tUser string) error {
+	ug := strings.SplitN(tUser, ":", 2)
+	nUser, err := user.Lookup(ug[0])
+	if err != nil {
+		return err
+	}
+	uid, err := strconv.ParseInt(nUser.Uid, 10, 32)
+	if err != nil {
+		return err
+	}
+	err = syscall.Setuid(int(uid))
+	return err
 }
 
 func log_err(msg string) {
