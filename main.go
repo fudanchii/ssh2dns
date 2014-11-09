@@ -8,7 +8,10 @@ import (
 	"io/ioutil"
 	"math/rand"
 	"net"
+	"os"
+	"os/signal"
 	"os/user"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,6 +56,28 @@ func init() {
 	flag.StringVar(&userSet, "u", "", "Set uid to this user")
 	flag.BoolVar(&debug, "d", false, "Set debug mode")
 	flag.BoolVar(&cache, "c", false, "Turn on query caching")
+
+	go func() {
+		hup := make(chan os.Signal, 1)
+		usr1 := make(chan os.Signal, 1)
+		signal.Notify(hup, syscall.SIGHUP)
+		signal.Notify(usr1, syscall.SIGUSR1)
+		for {
+			select {
+			case <-hup:
+				if !cache {
+					continue
+				}
+				cacheMutex.Lock()
+				log_info(fmt.Sprintf("flushing DNS cache: %d entries", len(cacheStorage)))
+				cacheStorage = make(map[string]cacheEntry)
+				cacheMutex.Unlock()
+				runtime.GC()
+			case <-usr1:
+				debug = !debug
+			}
+		}
+	}()
 }
 
 func main() {
