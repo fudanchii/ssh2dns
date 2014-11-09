@@ -97,7 +97,7 @@ func bindDNS(addr, socksaddr string, list []string) {
 
 	log_info("start accepting connection...")
 	for {
-		rdata := make([]byte, 2048)
+		rdata := make([]byte, 4096)
 		rlen, rAddr, err := L.ReadFromUDP(rdata)
 		if err != nil {
 			log_err("can not read request: " + err.Error())
@@ -177,7 +177,7 @@ func connectSOCKS(addr string, request *lookupRequest) {
 		return
 	}
 
-	rsp = make([]byte, 2048)
+	rsp = make([]byte, 65536)
 	rlen, err = conn.Read(rsp)
 	if err != nil {
 		log_err("query response: " + err.Error())
@@ -218,6 +218,7 @@ func sendFromCache(c *net.UDPConn, q []byte, target *net.UDPAddr) bool {
 		answer.Write(q[:2])
 		answer.Write(entry.Data)
 		c.WriteToUDP(answer.Bytes(), target)
+		log_raw("rsp", answer.Bytes())
 		return true
 	}
 
