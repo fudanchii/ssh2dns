@@ -45,8 +45,9 @@ var (
 )
 
 var (
-	cacheStorage = make(map[string]cacheEntry)
-	cacheMutex   = new(sync.Mutex)
+	cacheStorage   = make(map[string]cacheEntry)
+	cacheMutex     = new(sync.Mutex)
+	shutdownSignal = make(chan os.Signal, 1)
 )
 
 func init() {
@@ -56,6 +57,8 @@ func init() {
 	flag.StringVar(&userSet, "u", "", "Set uid to this user")
 	flag.BoolVar(&debug, "d", false, "Set debug mode")
 	flag.BoolVar(&cache, "c", false, "Turn on query caching")
+
+	signal.Notify(shutdownSignal, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGKILL, syscall.SIGTERM)
 
 	go func() {
 		hup := make(chan os.Signal, 1)
@@ -103,6 +106,8 @@ func readResolvConf(rfile string) []string {
 }
 
 func bindDNS(addr, socksaddr string, list []string) {
+	var wg sync.WaitGroup
+
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		log_err(err.Error())
@@ -121,28 +126,49 @@ func bindDNS(addr, socksaddr string, list []string) {
 	}
 
 	log_info("start accepting connection...")
-	for {
-		rdata := make([]byte, 4096)
-		rlen, rAddr, err := L.ReadFromUDP(rdata)
-		if err != nil {
-			log_err("can not read request: " + err.Error())
-			return
-		}
-		log_raw("request", rdata[:rlen])
 
-		go func(c *net.UDPConn, data []byte, target *net.UDPAddr) {
-			if sendFromCache(c, data, target) {
-				log_raw("cache", "HIT")
+	reqchan := make(chan *lookupRequest, 1024)
+	go func(c *net.UDPConn, dlist []string) {
+		for {
+			rdata := make([]byte, 4096)
+			rlen, rAddr, err := L.ReadFromUDP(rdata)
+			if err != nil {
+				log_err("can not read request: " + err.Error())
 				return
 			}
-			log_raw("cache", "MISS")
-			connectSOCKS(socksaddr, &lookupRequest{
+			log_raw("request", rdata[:rlen])
+			reqchan <- &lookupRequest{
 				Cconn:      c,
-				Data:       data,
-				DNS:        list[rand.Intn(len(list))],
-				SourceAddr: target,
-			})
-		}(L, rdata[:rlen], rAddr)
+				Data:       rdata[:rlen],
+				DNS:        dlist[rand.Intn(len(dlist))],
+				SourceAddr: rAddr,
+			}
+		}
+	}(L, list)
+
+	for {
+		select {
+		case <-shutdownSignal:
+			log_info("Shutting down...")
+			wg.Wait()
+			close(reqchan)
+			log_info("Bye!")
+			return
+		case dnsreq, ok := <-reqchan:
+			if !ok {
+				return
+			}
+			wg.Add(1)
+			go func(req *lookupRequest) {
+				defer wg.Done()
+				if sendFromCache(req.Cconn, req.Data, req.SourceAddr) {
+					log_raw("cache", "HIT")
+					return
+				}
+				log_raw("cache", "MISS")
+				connectSOCKS(socksaddr, req)
+			}(dnsreq)
+		}
 	}
 }
 
