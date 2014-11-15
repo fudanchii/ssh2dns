@@ -161,8 +161,8 @@ func bindDNS(addr, socksaddr string, list []string) {
 				log_raw("cache", "HIT")
 				continue
 			}
-			log_raw("cache", "MISS")
 			connectSOCKS(socksaddr, dnsreq)
+			log_raw("cache", "MISS")
 		}
 	}
 }
