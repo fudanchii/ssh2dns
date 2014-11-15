@@ -164,7 +164,7 @@ func bindDNS(addr, socksaddr string, list []string) {
 				defer wg.Done()
 				if sendFromCache(req.Cconn, req.Data, req.SourceAddr) {
 					log_raw("cache", "HIT")
-					continue
+					return
 				}
 				connectSOCKS(socksaddr, req)
 				log_raw("cache", "MISS")
