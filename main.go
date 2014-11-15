@@ -40,6 +40,7 @@ var (
 	socksAddr  string
 	resolvFile string
 	userSet    string
+	maxEntry   int
 	debug      bool
 	cache      bool
 )
@@ -55,6 +56,7 @@ func init() {
 	flag.StringVar(&socksAddr, "s", "127.0.0.1:8080", "Use this SOCKS connection, default to localhost:8080")
 	flag.StringVar(&resolvFile, "r", "./resolv.conf", "Use dns listed in this file, default to ./resolv.conf")
 	flag.StringVar(&userSet, "u", "", "Set uid to this user")
+	flag.IntVar(&maxEntry, "m", 512, "Set maximum number of entries for DNS cache")
 	flag.BoolVar(&debug, "d", false, "Set debug mode")
 	flag.BoolVar(&cache, "c", false, "Turn on query caching")
 
@@ -261,8 +263,8 @@ func setCache(q, data []byte) {
 
 func sendFromCache(c *net.UDPConn, q []byte, target *net.UDPAddr) bool {
 	cacheMutex.Lock()
+	defer cacheMutex.Unlock()
 	entry, exists := cacheStorage[string(q[13:])]
-	cacheMutex.Unlock()
 
 	if cache && exists && (time.Since(entry.CreatedAt) <= CacheTTL*time.Second) {
 		answer := new(bytes.Buffer)
@@ -271,6 +273,21 @@ func sendFromCache(c *net.UDPConn, q []byte, target *net.UDPAddr) bool {
 		c.WriteToUDP(answer.Bytes(), target)
 		log_raw("rsp", answer.Bytes())
 		return true
+	} else if exists && (time.Since(entry.CreatedAt) > CacheTTL*time.Second) {
+		delete(cacheStorage, string(q[13:]))
+	}
+
+	lc := len(cacheStorage)
+	if lc > maxEntry {
+		i := 0
+		for k, _ := range cacheStorage {
+			delete(cacheStorage, k)
+			if i > (maxEntry / 2) {
+				break
+			}
+			i++
+		}
+		log_info(fmt.Sprintf("Cache entries were too many: %d", lc))
 	}
 
 	return false
