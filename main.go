@@ -108,6 +108,7 @@ func readResolvConf(rfile string) []string {
 }
 
 func bindDNS(addr, socksaddr string, list []string) {
+	var wg sync.WaitGroup
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		log_err(err.Error())
@@ -150,6 +151,7 @@ func bindDNS(addr, socksaddr string, list []string) {
 		select {
 		case <-shutdownSignal:
 			log_info("Shutting down...")
+			wg.Wait()
 			close(reqchan)
 			log_info("Bye!")
 			return
@@ -157,12 +159,16 @@ func bindDNS(addr, socksaddr string, list []string) {
 			if !ok {
 				return
 			}
-			if sendFromCache(dnsreq.Cconn, dnsreq.Data, dnsreq.SourceAddr) {
-				log_raw("cache", "HIT")
-				continue
-			}
-			connectSOCKS(socksaddr, dnsreq)
-			log_raw("cache", "MISS")
+			wg.Add(1)
+			go func(req *lookupRequest) {
+				defer wg.Done()
+				if sendFromCache(req.Cconn, req.Data, req.SourceAddr) {
+					log_raw("cache", "HIT")
+					continue
+				}
+				connectSOCKS(socksaddr, req)
+				log_raw("cache", "MISS")
+			}(dnsreq)
 		}
 	}
 }
