@@ -325,7 +325,7 @@ func setPrivilege(tUser string) error {
 }
 
 func parseDNS(message []byte) bool {
-	var TrxID, Flag, Header, qRR, ansRR,
+	var TrxID, Flag, qRR, ansRR,
 		authRR, addRR int16
 	buff := bytes.NewReader(message)
 	if err := binary.Read(buff, binary.BigEndian, &TrxID); err != nil {
@@ -334,10 +334,6 @@ func parseDNS(message []byte) bool {
 	}
 	if err := binary.Read(buff, binary.BigEndian, &Flag); err != nil {
 		log_info("can't parse flag")
-		return false
-	}
-	if err := binary.Read(buff, binary.BigEndian, &Header); err != nil {
-		log_info("can't parse header")
 		return false
 	}
 	if err := binary.Read(buff, binary.BigEndian, &qRR); err != nil {
