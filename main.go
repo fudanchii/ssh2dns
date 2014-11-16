@@ -248,7 +248,7 @@ func connectSOCKS(addr string, request *lookupRequest) {
 	if cache && hasValidAnswerRR {
 		setCache(request.Data, rsp[2:rlen])
 	} else {
-		log_info("response not cached")
+		log_err("response not cached")
 	}
 }
 
@@ -290,7 +290,7 @@ func sendFromCache(c *net.UDPConn, q []byte, target *net.UDPAddr) bool {
 			}
 			i++
 		}
-		log_info(fmt.Sprintf("Cache entries were too many: %d", lc))
+		log_err(fmt.Sprintf("Cache entries were too many: %d", lc))
 	}
 
 	return false
@@ -329,31 +329,31 @@ func parseDNS(message []byte) bool {
 		authRR, addRR int16
 	buff := bytes.NewReader(message)
 	if err := binary.Read(buff, binary.BigEndian, &TrxID); err != nil {
-		log_info("can't parse trx id")
+		log_err("can't parse trx id")
 		return false
 	}
 	if err := binary.Read(buff, binary.BigEndian, &Flag); err != nil {
-		log_info("can't parse flag")
+		log_err("can't parse flag")
 		return false
 	}
 	if err := binary.Read(buff, binary.BigEndian, &qRR); err != nil {
-		log_info("can't parse question RR number")
+		log_err("can't parse question RR number")
 		return false
 	}
 	if err := binary.Read(buff, binary.BigEndian, &ansRR); err != nil {
-		log_info("can't parse answer RR number")
+		log_err("can't parse answer RR number")
 		return false
 	}
 	if ansRR < 1 {
-		log_info("no answer")
+		log_err("no answer")
 		return false
 	}
 	if err := binary.Read(buff, binary.BigEndian, &authRR); err != nil {
-		log_info("can't parse auth RR number")
+		log_err("can't parse auth RR number")
 		return false
 	}
 	if err := binary.Read(buff, binary.BigEndian, &addRR); err != nil {
-		log_info("can't parse additional RR number")
+		log_err("can't parse additional RR number")
 		return false
 	}
 	return true
