@@ -163,11 +163,11 @@ func bindDNS(addr, socksaddr string, list []string) {
 			go func(req *lookupRequest) {
 				defer wg.Done()
 				if sendFromCache(req.Cconn, req.Data, req.SourceAddr) {
-					log_raw("cache", "HIT")
+					log_info("cache HIT")
 					return
 				}
 				connectSOCKS(socksaddr, req)
-				log_raw("cache", "MISS")
+				log_info("cache MISS")
 			}(dnsreq)
 		}
 	}
