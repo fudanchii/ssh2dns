@@ -243,11 +243,9 @@ func connectSOCKS(addr string, request *lookupRequest) {
 		log_err("forward response: " + err.Error())
 	}
 
-	hasValidAnswerRR := parseDNS(rsp[2:rlen])
-
-	if cache && hasValidAnswerRR {
+	if cache && queryHasAnswer(rsp[2:rlen]) {
 		setCache(request.Data, rsp[2:rlen])
-	} else {
+	} else if cache {
 		log_err("response not cached")
 	}
 }
@@ -324,7 +322,7 @@ func setPrivilege(tUser string) error {
 	return err
 }
 
-func parseDNS(message []byte) bool {
+func queryHasAnswer(message []byte) bool {
 	var TrxID, Flag, qRR, ansRR,
 		authRR, addRR int16
 	buff := bytes.NewReader(message)
