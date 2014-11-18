@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/signal"
 	"os/user"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -74,12 +73,11 @@ func init() {
 					continue
 				}
 				cacheMutex.Lock()
-				log_info(fmt.Sprintf("flushing DNS cache: %d entries", len(cacheStorage)))
-				cacheStorage = make(map[string]cacheEntry)
+				log_info(fmt.Sprintf("current DNS cache: %d entries", len(cacheStorage)))
 				cacheMutex.Unlock()
-				runtime.GC()
 			case <-usr1:
 				debug = !debug
+				log_info(fmt.Sprintf("debug: %q", debug))
 			}
 		}
 	}()
@@ -264,8 +262,8 @@ func setCache(q, data []byte) {
 
 func sendFromCache(c *net.UDPConn, q []byte, target *net.UDPAddr) bool {
 	cacheMutex.Lock()
-	defer cacheMutex.Unlock()
 	entry, exists := cacheStorage[string(q[13:])]
+	cacheMutex.Unlock()
 
 	if cache && exists && (time.Since(entry.CreatedAt) <= CacheTTL*time.Second) {
 		answer := new(bytes.Buffer)
@@ -274,7 +272,10 @@ func sendFromCache(c *net.UDPConn, q []byte, target *net.UDPAddr) bool {
 		c.WriteToUDP(answer.Bytes(), target)
 		log_raw("rsp", answer.Bytes())
 		return true
-	} else if exists && (time.Since(entry.CreatedAt) > CacheTTL*time.Second) {
+	}
+
+	cacheMutex.Lock()
+	if exists && (time.Since(entry.CreatedAt) > CacheTTL*time.Second) {
 		delete(cacheStorage, string(q[13:]))
 	}
 
@@ -290,7 +291,7 @@ func sendFromCache(c *net.UDPConn, q []byte, target *net.UDPAddr) bool {
 		}
 		log_err(fmt.Sprintf("Cache entries were too many: %d", lc))
 	}
-
+	cacheMutex.Unlock()
 	return false
 }
 
