@@ -31,7 +31,7 @@ type cacheEntry struct {
 }
 
 const (
-	CacheTTL = 7200 // second
+	cacheTTL = 7200 // second
 )
 
 var (
@@ -73,11 +73,11 @@ func init() {
 					continue
 				}
 				cacheMutex.Lock()
-				log_info(fmt.Sprintf("current DNS cache: %d entries", len(cacheStorage)))
+				logInfo(fmt.Sprintf("current DNS cache: %d entries", len(cacheStorage)))
 				cacheMutex.Unlock()
 			case <-usr1:
 				debug = !debug
-				log_info(fmt.Sprintf("debug: %q", debug))
+				logInfo(fmt.Sprintf("debug: %q", debug))
 			}
 		}
 	}()
@@ -97,8 +97,8 @@ func main() {
 func readResolvConf(rfile string) []string {
 	content, err := ioutil.ReadFile(rfile)
 	if err != nil {
-		log_err("can't read resolv.conf: " + err.Error())
-		log_err("will use 8.8.8.8 and 8.8.4.4 as default resolver")
+		logErr("can't read resolv.conf: " + err.Error())
+		logErr("will use 8.8.8.8 and 8.8.4.4 as default resolver")
 		return []string{"8.8.8.8", "8.8.4.4"}
 	}
 	content = bytes.TrimSpace(content)
@@ -109,22 +109,22 @@ func bindDNS(addr, socksaddr string, list []string) {
 	var wg sync.WaitGroup
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
-		log_err(err.Error())
+		logErr(err.Error())
 		return
 	}
 	L, err := net.ListenUDP("udp", udpAddr)
 	if err != nil {
-		log_err(err.Error())
+		logErr(err.Error())
 		return
 	}
 	defer L.Close()
 
 	if err = setPrivilege(userSet); err != nil {
-		log_err("set privilege: " + err.Error())
+		logErr("set privilege: " + err.Error())
 		return
 	}
 
-	log_info("start accepting connection...")
+	logInfo("start accepting connection...")
 
 	reqchan := make(chan *lookupRequest, 1024)
 	go func(c *net.UDPConn, dlist []string) {
@@ -132,10 +132,10 @@ func bindDNS(addr, socksaddr string, list []string) {
 			rdata := make([]byte, 4096)
 			rlen, rAddr, err := L.ReadFromUDP(rdata)
 			if err != nil {
-				log_err("can not read request: " + err.Error())
+				logErr("can not read request: " + err.Error())
 				return
 			}
-			log_raw("request", rdata[:rlen])
+			logRaw("request", rdata[:rlen])
 			reqchan <- &lookupRequest{
 				Cconn:      c,
 				Data:       rdata[:rlen],
@@ -148,10 +148,10 @@ func bindDNS(addr, socksaddr string, list []string) {
 	for {
 		select {
 		case <-shutdownSignal:
-			log_info("Shutting down...")
+			logInfo("Shutting down...")
 			wg.Wait()
 			close(reqchan)
-			log_info("Bye!")
+			logInfo("Bye!")
 			return
 		case dnsreq, ok := <-reqchan:
 			if !ok {
@@ -161,11 +161,11 @@ func bindDNS(addr, socksaddr string, list []string) {
 			go func(req *lookupRequest) {
 				defer wg.Done()
 				if sendFromCache(req.Cconn, req.Data, req.SourceAddr) {
-					log_info("cache HIT")
+					logInfo("cache HIT")
 					return
 				}
 				connectSOCKS(socksaddr, req)
-				log_info("cache MISS")
+				logInfo("cache MISS")
 			}(dnsreq)
 		}
 	}
@@ -174,7 +174,7 @@ func bindDNS(addr, socksaddr string, list []string) {
 func connectSOCKS(addr string, request *lookupRequest) {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
-		log_err("socks server: " + err.Error())
+		logErr("socks server: " + err.Error())
 		return
 	}
 	defer conn.Close()
@@ -185,10 +185,10 @@ func connectSOCKS(addr string, request *lookupRequest) {
 	rsp := make([]byte, 512)
 	rlen, err := conn.Read(rsp)
 	if err != nil {
-		log_err("handshake response: " + err.Error())
+		logErr("handshake response: " + err.Error())
 		return
 	}
-	log_raw("handshake", rsp[:rlen])
+	logRaw("handshake", rsp[:rlen])
 
 	// Send SOCKS header, connect to this IP on this port
 	bbuff := new(bytes.Buffer)
@@ -196,55 +196,55 @@ func connectSOCKS(addr string, request *lookupRequest) {
 	bbuff.Write(net.ParseIP(request.DNS).To4())
 	bbuff.Write([]byte{0x00, 53})
 
-	log_raw("header", bbuff.Bytes()[:10])
+	logRaw("header", bbuff.Bytes()[:10])
 	_, err = conn.Write(bbuff.Bytes()[:10])
 	if err != nil {
-		log_err("send header: " + err.Error())
+		logErr("send header: " + err.Error())
 		return
 	}
 
 	rsp = make([]byte, 512)
 	rlen, err = conn.Read(rsp)
 	if err != nil {
-		log_err("header response: " + err.Error())
+		logErr("header response: " + err.Error())
 		return
 	}
-	log_raw("rsp", rsp[:rlen])
+	logRaw("rsp", rsp[:rlen])
 
 	// Need to prepend query length since we get this from UDP
 	// (TCP doesn't need this)
 	sbuff := new(bytes.Buffer)
 	if err = binary.Write(sbuff, binary.BigEndian, int16(len(request.Data))); err != nil {
-		log_err("packet length: " + err.Error())
+		logErr("packet length: " + err.Error())
 		return
 	}
 	sbuff.Write(request.Data)
 
-	log_raw("query", sbuff.Bytes())
+	logRaw("query", sbuff.Bytes())
 	_, err = conn.Write(sbuff.Bytes())
 	if err != nil {
-		log_err("send query: " + err.Error())
+		logErr("send query: " + err.Error())
 		return
 	}
 
 	rsp = make([]byte, 65536)
 	rlen, err = conn.Read(rsp)
 	if err != nil {
-		log_err("query response: " + err.Error())
+		logErr("query response: " + err.Error())
 		return
 	}
 
 	// Send back to UDP, do not want the length
-	log_raw("rsp", rsp[2:rlen])
+	logRaw("rsp", rsp[2:rlen])
 	_, err = request.Cconn.WriteToUDP(rsp[2:rlen], request.SourceAddr)
 	if err != nil {
-		log_err("forward response: " + err.Error())
+		logErr("forward response: " + err.Error())
 	}
 
 	if cache && queryHasAnswer(rsp[2:rlen]) {
 		setCache(request.Data, rsp[2:rlen])
 	} else if cache {
-		log_err("response not cached")
+		logErr("response not cached")
 	}
 }
 
@@ -265,31 +265,31 @@ func sendFromCache(c *net.UDPConn, q []byte, target *net.UDPAddr) bool {
 	entry, exists := cacheStorage[string(q[13:])]
 	cacheMutex.Unlock()
 
-	if cache && exists && (time.Since(entry.CreatedAt) <= CacheTTL*time.Second) {
+	if cache && exists && (time.Since(entry.CreatedAt) <= cacheTTL*time.Second) {
 		answer := new(bytes.Buffer)
 		answer.Write(q[:2])
 		answer.Write(entry.Data)
 		c.WriteToUDP(answer.Bytes(), target)
-		log_raw("rsp", answer.Bytes())
+		logRaw("rsp", answer.Bytes())
 		return true
 	}
 
 	cacheMutex.Lock()
-	if exists && (time.Since(entry.CreatedAt) > CacheTTL*time.Second) {
+	if exists && (time.Since(entry.CreatedAt) > cacheTTL*time.Second) {
 		delete(cacheStorage, string(q[13:]))
 	}
 
 	lc := len(cacheStorage)
 	if lc > maxEntry {
 		i := 0
-		for k, _ := range cacheStorage {
+		for k := range cacheStorage {
 			delete(cacheStorage, k)
 			if i > (maxEntry / 2) {
 				break
 			}
 			i++
 		}
-		log_err(fmt.Sprintf("Cache entries were too many: %d", lc))
+		logErr(fmt.Sprintf("Cache entries were too many: %d", lc))
 	}
 	cacheMutex.Unlock()
 	return false
@@ -306,7 +306,7 @@ func setPrivilege(tUser string) error {
 	}
 
 	if current.Uid != "0" {
-		log_info("not a root, will keep running as " + current.Username)
+		logInfo("not a root, will keep running as " + current.Username)
 		return nil
 	}
 
@@ -328,44 +328,44 @@ func queryHasAnswer(message []byte) bool {
 		authRR, addRR int16
 	buff := bytes.NewReader(message)
 	if err := binary.Read(buff, binary.BigEndian, &TrxID); err != nil {
-		log_err("can't parse trx id")
+		logErr("can't parse trx id")
 		return false
 	}
 	if err := binary.Read(buff, binary.BigEndian, &Flag); err != nil {
-		log_err("can't parse flag")
+		logErr("can't parse flag")
 		return false
 	}
 	if err := binary.Read(buff, binary.BigEndian, &qRR); err != nil {
-		log_err("can't parse question RR number")
+		logErr("can't parse question RR number")
 		return false
 	}
 	if err := binary.Read(buff, binary.BigEndian, &ansRR); err != nil {
-		log_err("can't parse answer RR number")
+		logErr("can't parse answer RR number")
 		return false
 	}
 	if ansRR < 1 {
-		log_err("no answer")
+		logErr("no answer")
 		return false
 	}
 	if err := binary.Read(buff, binary.BigEndian, &authRR); err != nil {
-		log_err("can't parse auth RR number")
+		logErr("can't parse auth RR number")
 		return false
 	}
 	if err := binary.Read(buff, binary.BigEndian, &addRR); err != nil {
-		log_err("can't parse additional RR number")
+		logErr("can't parse additional RR number")
 		return false
 	}
 	return true
 }
 
-func log_err(msg string) {
+func logErr(msg string) {
 	fmt.Printf("[!] %s\n", msg)
 }
-func log_info(msg string) {
+func logInfo(msg string) {
 	fmt.Printf("[-] %s\n", msg)
 }
 
-func log_raw(label string, msg interface{}) {
+func logRaw(label string, msg interface{}) {
 	if debug {
 		fmt.Printf("[*] <%s> %q\n", label, msg)
 	}
