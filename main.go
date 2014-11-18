@@ -324,35 +324,17 @@ func setPrivilege(tUser string) error {
 }
 
 func queryHasAnswer(message []byte) bool {
-	var TrxID, Flag, qRR, ansRR,
-		authRR, addRR int16
-	buff := bytes.NewReader(message)
-	if err := binary.Read(buff, binary.BigEndian, &TrxID); err != nil {
-		logErr("can't parse trx id")
-		return false
-	}
-	if err := binary.Read(buff, binary.BigEndian, &Flag); err != nil {
-		logErr("can't parse flag")
-		return false
-	}
-	if err := binary.Read(buff, binary.BigEndian, &qRR); err != nil {
-		logErr("can't parse question RR number")
-		return false
-	}
+	var ansRR int16
+
+	// read from the 6th byte,
+	// we just want to know if this message contains answer RR
+	buff := bytes.NewReader(message[6:])
 	if err := binary.Read(buff, binary.BigEndian, &ansRR); err != nil {
 		logErr("can't parse answer RR number")
 		return false
 	}
 	if ansRR < 1 {
 		logErr("no answer")
-		return false
-	}
-	if err := binary.Read(buff, binary.BigEndian, &authRR); err != nil {
-		logErr("can't parse auth RR number")
-		return false
-	}
-	if err := binary.Read(buff, binary.BigEndian, &addRR); err != nil {
-		logErr("can't parse additional RR number")
 		return false
 	}
 	return true
