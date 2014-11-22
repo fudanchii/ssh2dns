@@ -185,7 +185,7 @@ func connectSOCKS(addr string, request *lookupRequest) {
 
 	rsp := make([]byte, 512)
 	rlen, err := conn.Read(rsp)
-	if err != nil && err != io.EOF {
+	if (err == io.EOF && rlen <= 0) || err != nil {
 		logErr("handshake response: " + err.Error())
 		return
 	}
@@ -206,7 +206,7 @@ func connectSOCKS(addr string, request *lookupRequest) {
 
 	rsp = make([]byte, 512)
 	rlen, err = conn.Read(rsp)
-	if err != nil && err != io.EOF {
+	if (err == io.EOF && rlen <= 0) || err != nil {
 		logErr("header response: " + err.Error())
 		return
 	}
@@ -230,7 +230,7 @@ func connectSOCKS(addr string, request *lookupRequest) {
 
 	rsp = make([]byte, 65536)
 	rlen, err = conn.Read(rsp)
-	if err != nil && err != io.EOF {
+	if (err == io.EOF && rlen <= 0) || err != nil {
 		logErr("query response: " + err.Error())
 		return
 	}
