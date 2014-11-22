@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"math/rand"
 	"net"
@@ -97,7 +98,7 @@ func main() {
 func readResolvConf(rfile string) []string {
 	content, err := ioutil.ReadFile(rfile)
 	if err != nil {
-		logErr("can't read resolv.conf: " + err.Error())
+		logErr("can't read resolver list: " + err.Error())
 		logErr("will use 8.8.8.8 and 8.8.4.4 as default resolver")
 		return []string{"8.8.8.8", "8.8.4.4"}
 	}
@@ -130,7 +131,7 @@ func bindDNS(addr, socksaddr string, list []string) {
 	go func(c *net.UDPConn, dlist []string) {
 		for {
 			rdata := make([]byte, 4096)
-			rlen, rAddr, err := L.ReadFromUDP(rdata)
+			rlen, rAddr, err := c.ReadFromUDP(rdata)
 			if err != nil {
 				logErr("can not read request: " + err.Error())
 				return
@@ -184,7 +185,7 @@ func connectSOCKS(addr string, request *lookupRequest) {
 
 	rsp := make([]byte, 512)
 	rlen, err := conn.Read(rsp)
-	if err != nil {
+	if err != nil && err != io.EOF {
 		logErr("handshake response: " + err.Error())
 		return
 	}
@@ -205,7 +206,7 @@ func connectSOCKS(addr string, request *lookupRequest) {
 
 	rsp = make([]byte, 512)
 	rlen, err = conn.Read(rsp)
-	if err != nil {
+	if err != nil && err != io.EOF {
 		logErr("header response: " + err.Error())
 		return
 	}
@@ -229,7 +230,7 @@ func connectSOCKS(addr string, request *lookupRequest) {
 
 	rsp = make([]byte, 65536)
 	rlen, err = conn.Read(rsp)
-	if err != nil {
+	if err != nil && err != io.EOF {
 		logErr("query response: " + err.Error())
 		return
 	}
