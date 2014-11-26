@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"flag"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"math/rand"
 	"net"
@@ -31,6 +30,11 @@ type cacheEntry struct {
 	CreatedAt time.Time
 }
 
+type cacheStorage struct {
+	Entries map[string]cacheEntry
+	Mutex   *sync.Mutex
+}
+
 const (
 	cacheTTL = 7200 // second
 )
@@ -42,12 +46,14 @@ var (
 	userSet    string
 	maxEntry   int
 	debug      bool
-	cache      bool
+	useCache   bool
 )
 
 var (
-	cacheStorage   = make(map[string]cacheEntry)
-	cacheMutex     = new(sync.Mutex)
+	cache = cacheStorage{
+		Entries: make(map[string]cacheEntry),
+		Mutex:   new(sync.Mutex),
+	}
 	shutdownSignal = make(chan os.Signal, 1)
 )
 
@@ -58,7 +64,7 @@ func init() {
 	flag.StringVar(&userSet, "u", "", "Set uid to this user")
 	flag.IntVar(&maxEntry, "m", 512, "Set maximum number of entries for DNS cache")
 	flag.BoolVar(&debug, "d", false, "Set debug mode")
-	flag.BoolVar(&cache, "c", false, "Turn on query caching")
+	flag.BoolVar(&useCache, "c", false, "Turn on query caching")
 
 	signal.Notify(shutdownSignal, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGKILL, syscall.SIGTERM)
 
@@ -70,12 +76,12 @@ func init() {
 		for {
 			select {
 			case <-hup:
-				if !cache {
+				if !useCache {
 					continue
 				}
-				cacheMutex.Lock()
-				logInfo(fmt.Sprintf("current DNS cache: %d entries", len(cacheStorage)))
-				cacheMutex.Unlock()
+				cache.Mutex.Lock()
+				logInfo(fmt.Sprintf("current DNS cache: %d entries", len(cache.Entries)))
+				cache.Mutex.Unlock()
 			case <-usr1:
 				debug = !debug
 				logInfo(fmt.Sprintf("debug: %q", debug))
@@ -161,7 +167,7 @@ func bindDNS(addr, socksaddr string, list []string) {
 			wg.Add(1)
 			go func(req *lookupRequest) {
 				defer wg.Done()
-				if sendFromCache(req.Cconn, req.Data, req.SourceAddr) {
+				if useCache && sendFromCache(req.Cconn, req.Data, req.SourceAddr) {
 					logInfo("cache HIT")
 					return
 				}
@@ -185,7 +191,7 @@ func connectSOCKS(addr string, request *lookupRequest) {
 
 	rsp := make([]byte, 512)
 	rlen, err := conn.Read(rsp)
-	if (err == io.EOF && rlen <= 0) || err != nil {
+	if err != nil {
 		logErr("handshake response: " + err.Error())
 		return
 	}
@@ -206,7 +212,7 @@ func connectSOCKS(addr string, request *lookupRequest) {
 
 	rsp = make([]byte, 512)
 	rlen, err = conn.Read(rsp)
-	if (err == io.EOF && rlen <= 0) || err != nil {
+	if err != nil {
 		logErr("header response: " + err.Error())
 		return
 	}
@@ -230,7 +236,7 @@ func connectSOCKS(addr string, request *lookupRequest) {
 
 	rsp = make([]byte, 65536)
 	rlen, err = conn.Read(rsp)
-	if (err == io.EOF && rlen <= 0) || err != nil {
+	if err != nil {
 		logErr("query response: " + err.Error())
 		return
 	}
@@ -242,31 +248,33 @@ func connectSOCKS(addr string, request *lookupRequest) {
 		logErr("forward response: " + err.Error())
 	}
 
-	if cache && queryHasAnswer(rsp[2:rlen]) {
+	if useCache && queryHasAnswer(rsp[2:rlen]) {
 		setCache(request.Data, rsp[2:rlen])
-	} else if cache {
+	} else if useCache {
 		logErr("response not cached")
 	}
 }
 
 func setCache(q, data []byte) {
-	cacheMutex.Lock()
+	cache.Mutex.Lock()
 
 	// only match q from the 13th character
-	cacheStorage[string(q[13:])] = cacheEntry{
+	cache.Entries[string(q[13:])] = cacheEntry{
 		Data:      data[2:],
 		CreatedAt: time.Now(),
 	}
 
-	cacheMutex.Unlock()
+	cache.Mutex.Unlock()
 }
 
+// sendFromCache will check if query is already cached and send the cached
+// response back to user. This function will assume useCache is true
 func sendFromCache(c *net.UDPConn, q []byte, target *net.UDPAddr) bool {
-	cacheMutex.Lock()
-	entry, exists := cacheStorage[string(q[13:])]
-	cacheMutex.Unlock()
+	cache.Mutex.Lock()
+	entry, exists := cache.Entries[string(q[13:])]
+	cache.Mutex.Unlock()
 
-	if cache && exists && (time.Since(entry.CreatedAt) <= cacheTTL*time.Second) {
+	if exists && (time.Since(entry.CreatedAt) <= cacheTTL*time.Second) {
 		answer := new(bytes.Buffer)
 		answer.Write(q[:2])
 		answer.Write(entry.Data)
@@ -275,16 +283,16 @@ func sendFromCache(c *net.UDPConn, q []byte, target *net.UDPAddr) bool {
 		return true
 	}
 
-	cacheMutex.Lock()
+	cache.Mutex.Lock()
 	if exists && (time.Since(entry.CreatedAt) > cacheTTL*time.Second) {
-		delete(cacheStorage, string(q[13:]))
+		delete(cache.Entries, string(q[13:]))
 	}
 
-	lc := len(cacheStorage)
+	lc := len(cache.Entries)
 	if lc > maxEntry {
 		i := 0
-		for k := range cacheStorage {
-			delete(cacheStorage, k)
+		for k := range cache.Entries {
+			delete(cache.Entries, k)
 			if i > (maxEntry / 2) {
 				break
 			}
@@ -292,7 +300,7 @@ func sendFromCache(c *net.UDPConn, q []byte, target *net.UDPAddr) bool {
 		}
 		logErr(fmt.Sprintf("Cache entries were too many: %d", lc))
 	}
-	cacheMutex.Unlock()
+	cache.Mutex.Unlock()
 	return false
 }
 
