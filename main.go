@@ -10,8 +10,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"os/user"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -43,7 +41,6 @@ var (
 	bindAddr   string
 	socksAddr  string
 	resolvFile string
-	userSet    string
 	maxEntry   int
 	debug      bool
 	useCache   bool
@@ -61,7 +58,6 @@ func init() {
 	flag.StringVar(&bindAddr, "b", "127.0.0.1:53", "Bind to address, default to localhost:53")
 	flag.StringVar(&socksAddr, "s", "127.0.0.1:8080", "Use this SOCKS connection, default to localhost:8080")
 	flag.StringVar(&resolvFile, "r", "./resolv.conf", "Use dns listed in this file, default to ./resolv.conf")
-	flag.StringVar(&userSet, "u", "", "Set uid to this user")
 	flag.IntVar(&maxEntry, "m", 512, "Set maximum number of entries for DNS cache")
 	flag.BoolVar(&debug, "d", false, "Set debug mode")
 	flag.BoolVar(&useCache, "c", false, "Turn on query caching")
@@ -125,11 +121,6 @@ func bindDNS(addr, socksaddr string, list []string) {
 		return
 	}
 	defer L.Close()
-
-	if err = setPrivilege(userSet); err != nil {
-		logErr("set privilege: " + err.Error())
-		return
-	}
 
 	logInfo("start accepting connection...")
 
@@ -302,34 +293,6 @@ func sendFromCache(c *net.UDPConn, q []byte, target *net.UDPAddr) bool {
 	}
 	cache.Mutex.Unlock()
 	return false
-}
-
-func setPrivilege(tUser string) error {
-	if len(tUser) == 0 {
-		return nil
-	}
-
-	current, err := user.Current()
-	if err != nil {
-		return err
-	}
-
-	if current.Uid != "0" {
-		logInfo("not a root, will keep running as " + current.Username)
-		return nil
-	}
-
-	ug := strings.SplitN(tUser, ":", 2)
-	nUser, err := user.Lookup(ug[0])
-	if err != nil {
-		return err
-	}
-	uid, err := strconv.ParseInt(nUser.Uid, 10, 32)
-	if err != nil {
-		return err
-	}
-	err = syscall.Setuid(int(uid))
-	return err
 }
 
 func queryHasAnswer(message []byte) bool {
