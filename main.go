@@ -1,3 +1,25 @@
+// Socks5dns relays DNS request via ssh tunnel proxy
+// it works by connecting to specified remote ssh server
+// and bind to local address. It will then forward any
+// dns request via ssh connection to the DNS server, randomly-
+// chosen from the specified list.
+//
+// Socks5dns also provides simple caching for the nameserver
+// query result.
+//
+// Usage examples:
+// 		$ socks5dns -s example.com:22 -b localhost:53 -r /etc/socks5dns/resolv.txt
+//
+// Options:
+//		-b=<127.0.0.1:53>       Bind to this host and port, default to 127.0.0.1:53
+//		-c                      Enable caching
+//		-d                      Enable debug message
+//		-i=<$HOME/.ssh/id_rsa>  Specify identity file to use when connecting to ssh server
+//		-m=<512>                Set maximum number of cache entries, default to 512
+//		-r=<./resolv.conf>      Specify a file for list of DNS to use, default to ./resolv.conf
+//		-s=<127.0.0.1:22>       Connect to this ssh server, default to 127.0.0.1:22
+//		-u=<$USER>              Specify user to connect with ssh server
+//
 package main
 
 import (
@@ -6,16 +28,27 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"math/rand"
 	"net"
 	"os"
 	"os/signal"
+	"path"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 )
 
+type handler interface {
+	Accept(*lookupRequest)
+}
+
+// lookupRequest holds information for each request,
+// including source address, payload data and
+// DNS server being used.
 type lookupRequest struct {
 	Cconn      *net.UDPConn
 	Data       []byte
@@ -23,14 +56,28 @@ type lookupRequest struct {
 	SourceAddr *net.UDPAddr
 }
 
+// cacheEntry stores answer payload and its timestamp
 type cacheEntry struct {
 	Data      []byte
 	CreatedAt time.Time
 }
 
+// cacheStorage maps query to its cached answer.
 type cacheStorage struct {
 	Entries map[string]cacheEntry
 	Mutex   *sync.Mutex
+}
+
+// dnsServer holds local dns server listener.
+type dnsServer struct {
+	RequestChannel chan *lookupRequest
+	Listener       net.Conn
+}
+
+// proxyHandler handle dns request and relay them
+// via proxy connection.
+type proxyHandler struct {
+	Client *ssh.Client
 }
 
 const (
@@ -38,12 +85,14 @@ const (
 )
 
 var (
-	bindAddr   string
-	socksAddr  string
-	resolvFile string
-	maxEntry   int
-	debug      bool
-	useCache   bool
+	bindAddr    string
+	remoteAddr  string
+	remoteUser  string
+	resolvFile  string
+	privkeyFile string
+	maxEntry    int
+	debug       bool
+	useCache    bool
 )
 
 var (
@@ -55,12 +104,15 @@ var (
 )
 
 func init() {
-	flag.StringVar(&bindAddr, "b", "127.0.0.1:53", "Bind to address, default to localhost:53")
-	flag.StringVar(&socksAddr, "s", "127.0.0.1:8080", "Use this SOCKS connection, default to localhost:8080")
-	flag.StringVar(&resolvFile, "r", "./resolv.conf", "Use dns listed in this file, default to ./resolv.conf")
-	flag.IntVar(&maxEntry, "m", 512, "Set maximum number of entries for DNS cache")
-	flag.BoolVar(&debug, "d", false, "Set debug mode")
-	flag.BoolVar(&useCache, "c", false, "Turn on query caching")
+	defrsa := path.Join(os.Getenv("HOME"), ".ssh/id_rsa")
+	flag.StringVar(&bindAddr, "b", "127.0.0.1:53", "Bind to this host and port, default to 127.0.0.1:53")
+	flag.BoolVar(&useCache, "c", false, "Enable caching")
+	flag.BoolVar(&debug, "d", false, "Enable debug message")
+	flag.StringVar(&privkeyFile, "i", defrsa, "Specify identity file to use when connecting to ssh server")
+	flag.IntVar(&maxEntry, "m", 512, "Set maximum number of cache entries, default to 512")
+	flag.StringVar(&resolvFile, "r", "./resolv.conf", "Specify a file for list of DNS to use, default to ./resolv.conf")
+	flag.StringVar(&remoteAddr, "s", "127.0.0.1:22", "Connect to this ssh server, default to 127.0.0.1:22")
+	flag.StringVar(&remoteUser, "u", os.Getenv("USER"), "Specify user to connect with ssh server")
 
 	signal.Notify(shutdownSignal, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGKILL, syscall.SIGTERM)
 
@@ -80,7 +132,7 @@ func init() {
 				cache.Mutex.Unlock()
 			case <-usr1:
 				debug = !debug
-				logInfo(fmt.Sprintf("debug: %q", debug))
+				logInfo(fmt.Sprintf("debug: %v", debug))
 			}
 		}
 	}()
@@ -93,8 +145,9 @@ func main() {
 	// open resolver file, create dns list
 	DNSlist := readResolvConf(resolvFile)
 
-	// bind to dns port and wait
-	bindDNS(bindAddr, socksAddr, DNSlist)
+	// Create proxy
+	dns := bindDNS(bindAddr, DNSlist)
+	dns.Serve(viaProxy(remoteAddr))
 }
 
 func readResolvConf(rfile string) []string {
@@ -108,24 +161,20 @@ func readResolvConf(rfile string) []string {
 	return strings.Split(string(content), "\n")
 }
 
-func bindDNS(addr, socksaddr string, list []string) {
-	var wg sync.WaitGroup
+func bindDNS(addr string, list []string) *dnsServer {
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
-		logErr(err.Error())
-		return
+		log.Fatal(err.Error())
 	}
 	L, err := net.ListenUDP("udp", udpAddr)
 	if err != nil {
-		logErr(err.Error())
-		return
+		log.Fatal(err.Error())
 	}
-	defer L.Close()
 
 	logInfo("start accepting connection...")
 
 	reqchan := make(chan *lookupRequest, 1024)
-	go func(c *net.UDPConn, dlist []string) {
+	go func(c *net.UDPConn, dlist []string, rqch chan *lookupRequest) {
 		for {
 			rdata := make([]byte, 4096)
 			rlen, rAddr, err := c.ReadFromUDP(rdata)
@@ -141,17 +190,47 @@ func bindDNS(addr, socksaddr string, list []string) {
 				SourceAddr: rAddr,
 			}
 		}
-	}(L, list)
+	}(L, list, reqchan)
+	return &dnsServer{
+		RequestChannel: reqchan,
+		Listener:       L,
+	}
+}
 
+func viaProxy(rAddr string) handler {
+	pk, err := ioutil.ReadFile(privkeyFile)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+	signer, err := ssh.ParsePrivateKey(pk)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+	client, err := ssh.Dial("tcp", rAddr, &ssh.ClientConfig{
+		User: remoteUser,
+		Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
+	})
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+	logInfo("connected to " + rAddr)
+	return &proxyHandler{
+		Client: client,
+	}
+}
+
+func (ds *dnsServer) Serve(hnd handler) {
+	var wg sync.WaitGroup
+	defer ds.Listener.Close()
 	for {
 		select {
 		case <-shutdownSignal:
 			logInfo("Shutting down...")
 			wg.Wait()
-			close(reqchan)
+			close(ds.RequestChannel)
 			logInfo("Bye!")
 			return
-		case dnsreq, ok := <-reqchan:
+		case dnsreq, ok := <-ds.RequestChannel:
 			if !ok {
 				return
 			}
@@ -162,61 +241,27 @@ func bindDNS(addr, socksaddr string, list []string) {
 					logInfo("cache HIT")
 					return
 				}
-				connectSOCKS(socksaddr, req)
+				hnd.Accept(req)
 				logInfo("cache MISS")
 			}(dnsreq)
 		}
 	}
 }
 
-func connectSOCKS(addr string, request *lookupRequest) {
-	conn, err := net.Dial("tcp", addr)
+func (ph *proxyHandler) Accept(req *lookupRequest) {
+	conn, err := ph.Client.Dial("tcp", req.DNS+":53")
 	if err != nil {
-		logErr("socks server: " + err.Error())
+		logErr("can't connect to remote dns: " + err.Error())
 		return
 	}
-	defer conn.Close()
-
-	// First bow
-	conn.Write([]byte{0x05, 0x01, 0x00})
-
-	rsp := make([]byte, 512)
-	rlen, err := conn.Read(rsp)
-	if err != nil {
-		logErr("handshake response: " + err.Error())
-		return
-	}
-	logRaw("handshake", rsp[:rlen])
-
-	// Send SOCKS header, connect to this IP on this port
-	bbuff := new(bytes.Buffer)
-	bbuff.Write([]byte{0x05, 0x01, 0x00, 0x01})
-	bbuff.Write(net.ParseIP(request.DNS).To4())
-	bbuff.Write([]byte{0x00, 53})
-
-	logRaw("header", bbuff.Bytes()[:10])
-	_, err = conn.Write(bbuff.Bytes()[:10])
-	if err != nil {
-		logErr("send header: " + err.Error())
-		return
-	}
-
-	rsp = make([]byte, 512)
-	rlen, err = conn.Read(rsp)
-	if err != nil {
-		logErr("header response: " + err.Error())
-		return
-	}
-	logRaw("rsp", rsp[:rlen])
-
 	// Need to prepend query length since we get this from UDP
 	// (TCP doesn't need this)
 	sbuff := new(bytes.Buffer)
-	if err = binary.Write(sbuff, binary.BigEndian, int16(len(request.Data))); err != nil {
+	if err = binary.Write(sbuff, binary.BigEndian, int16(len(req.Data))); err != nil {
 		logErr("packet length: " + err.Error())
 		return
 	}
-	sbuff.Write(request.Data)
+	sbuff.Write(req.Data)
 
 	logRaw("query", sbuff.Bytes())
 	_, err = conn.Write(sbuff.Bytes())
@@ -225,8 +270,8 @@ func connectSOCKS(addr string, request *lookupRequest) {
 		return
 	}
 
-	rsp = make([]byte, 65536)
-	rlen, err = conn.Read(rsp)
+	rsp := make([]byte, 65536)
+	rlen, err := conn.Read(rsp)
 	if err != nil {
 		logErr("query response: " + err.Error())
 		return
@@ -234,13 +279,13 @@ func connectSOCKS(addr string, request *lookupRequest) {
 
 	// Send back to UDP, do not want the length
 	logRaw("rsp", rsp[2:rlen])
-	_, err = request.Cconn.WriteToUDP(rsp[2:rlen], request.SourceAddr)
+	_, err = req.Cconn.WriteToUDP(rsp[2:rlen], req.SourceAddr)
 	if err != nil {
 		logErr("forward response: " + err.Error())
 	}
 
 	if useCache && queryHasAnswer(rsp[2:rlen]) {
-		setCache(request.Data, rsp[2:rlen])
+		setCache(req.Data, rsp[2:rlen])
 	} else if useCache {
 		logErr("response not cached")
 	}
