@@ -44,6 +44,7 @@ import (
 
 type handler interface {
 	Accept(*lookupRequest)
+	Close()
 }
 
 // lookupRequest holds information for each request,
@@ -221,14 +222,17 @@ func viaProxy(rAddr string) handler {
 
 func (ds *dnsServer) Serve(hnd handler) {
 	var wg sync.WaitGroup
-	defer ds.Listener.Close()
+	defer func() {
+		logInfo("Shutting down...")
+		ds.Listener.Close()
+		close(ds.RequestChannel)
+		wg.Wait()
+		hnd.Close()
+		logInfo("Bye!")
+	}()
 	for {
 		select {
 		case <-shutdownSignal:
-			logInfo("Shutting down...")
-			wg.Wait()
-			close(ds.RequestChannel)
-			logInfo("Bye!")
 			return
 		case dnsreq, ok := <-ds.RequestChannel:
 			if !ok {
@@ -289,6 +293,10 @@ func (ph *proxyHandler) Accept(req *lookupRequest) {
 	} else if useCache {
 		logErr("response not cached")
 	}
+}
+
+func (ph *proxyHandler) Close() {
+	ph.Client.Conn.Close()
 }
 
 func setCache(q, data []byte) {
