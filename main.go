@@ -247,6 +247,8 @@ func (ph *proxyHandler) Accept(req *lookupRequest) {
 		ph.Reconnect()
 		return
 	}
+	defer conn.Close()
+
 	// Need to prepend query length since we get this from UDP
 	// (TCP doesn't need this)
 	sbuff := new(bytes.Buffer)
@@ -292,8 +294,7 @@ func (ph *proxyHandler) Reconnect() {
 	ph.Close()
 	logInfo("SSH connection closed, reconnecing...")
 	sshReconnect <- true
-	newClient := <-sshClientChannel
-	ph.Client = newClient
+	ph.Client = <-sshClientChannel
 }
 
 func setCache(q, data []byte) {
