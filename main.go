@@ -45,6 +45,7 @@ import (
 type handler interface {
 	Accept(*lookupRequest)
 	Close()
+	Reconnect()
 }
 
 // lookupRequest holds information for each request,
@@ -101,7 +102,9 @@ var (
 		Entries: make(map[string]cacheEntry),
 		Mutex:   new(sync.Mutex),
 	}
-	shutdownSignal = make(chan os.Signal, 1)
+	shutdownSignal   = make(chan os.Signal, 1)
+	sshClientChannel = make(chan *ssh.Client, 1)
+	sshReconnect     = make(chan bool, 1)
 )
 
 func init() {
@@ -199,22 +202,9 @@ func bindDNS(addr string, list []string) *dnsServer {
 }
 
 func viaProxy(rAddr string) handler {
-	pk, err := ioutil.ReadFile(privkeyFile)
-	if err != nil {
-		log.Fatal(err.Error())
-	}
-	signer, err := ssh.ParsePrivateKey(pk)
-	if err != nil {
-		log.Fatal(err.Error())
-	}
-	client, err := ssh.Dial("tcp", rAddr, &ssh.ClientConfig{
-		User: remoteUser,
-		Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
-	})
-	if err != nil {
-		log.Fatal(err.Error())
-	}
-	logInfo("connected to " + rAddr)
+	go connectSSH(rAddr)
+	sshReconnect <- true
+	client := <-sshClientChannel
 	return &proxyHandler{
 		Client: client,
 	}
@@ -227,6 +217,7 @@ func (ds *dnsServer) Serve(hnd handler) {
 		ds.Listener.Close()
 		close(ds.RequestChannel)
 		wg.Wait()
+		close(sshReconnect)
 		hnd.Close()
 		logInfo("Bye!")
 	}()
@@ -234,10 +225,7 @@ func (ds *dnsServer) Serve(hnd handler) {
 		select {
 		case <-shutdownSignal:
 			return
-		case dnsreq, ok := <-ds.RequestChannel:
-			if !ok {
-				return
-			}
+		case dnsreq := <-ds.RequestChannel:
 			wg.Add(1)
 			go func(req *lookupRequest) {
 				defer wg.Done()
@@ -256,6 +244,7 @@ func (ph *proxyHandler) Accept(req *lookupRequest) {
 	conn, err := ph.Client.Dial("tcp", req.DNS+":53")
 	if err != nil {
 		logErr("can't connect to remote dns: " + err.Error())
+		ph.Reconnect()
 		return
 	}
 	// Need to prepend query length since we get this from UDP
@@ -297,6 +286,14 @@ func (ph *proxyHandler) Accept(req *lookupRequest) {
 
 func (ph *proxyHandler) Close() {
 	ph.Client.Conn.Close()
+}
+
+func (ph *proxyHandler) Reconnect() {
+	ph.Close()
+	logInfo("SSH connection closed, reconnecing...")
+	sshReconnect <- true
+	newClient := <-sshClientChannel
+	ph.Client = newClient
 }
 
 func setCache(q, data []byte) {
@@ -363,6 +360,33 @@ func queryHasAnswer(message []byte) bool {
 		return false
 	}
 	return true
+}
+
+func connectSSH(addr string) {
+	pk, err := ioutil.ReadFile(privkeyFile)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+	signer, err := ssh.ParsePrivateKey(pk)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+
+	for {
+		if _, ok := <-sshReconnect; !ok {
+			close(sshClientChannel)
+			return
+		}
+		client, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
+			User: remoteUser,
+			Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		})
+		if err != nil {
+			log.Fatal(err.Error())
+		}
+		sshClientChannel <- client
+		logInfo("connected to " + addr)
+	}
 }
 
 func logErr(msg string) {
