@@ -39,6 +39,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fudanchii/edssh"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -265,7 +266,7 @@ func (ph *proxyHandler) Accept(req *lookupRequest) {
 		return
 	}
 
-	rsp := make([]byte, 65536)
+	rsp := make([]byte, 4096)
 	rlen, err := conn.Read(rsp)
 	if err != nil {
 		logErr("query response: " + err.Error())
@@ -292,7 +293,7 @@ func (ph *proxyHandler) Close() {
 
 func (ph *proxyHandler) Reconnect() {
 	ph.Close()
-	logInfo("SSH connection closed, reconnecing...")
+	logInfo("SSH connection closed, reconnecting...")
 	sshReconnect <- true
 	ph.Client = <-sshClientChannel
 }
@@ -368,7 +369,7 @@ func connectSSH(addr string) {
 	if err != nil {
 		log.Fatal(err.Error())
 	}
-	signer, err := ssh.ParsePrivateKey(pk)
+	signer, err := edssh.ParsePrivateKey(pk)
 	if err != nil {
 		log.Fatal(err.Error())
 	}
