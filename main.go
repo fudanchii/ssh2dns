@@ -90,6 +90,7 @@ const (
 var (
 	bindAddr    string
 	remoteAddr  string
+	hostKey     string
 	remoteUser  string
 	resolvFile  string
 	privkeyFile string
@@ -118,6 +119,7 @@ func init() {
 	flag.StringVar(&resolvFile, "r", "./resolv.conf", "Specify a file for list of DNS to use, default to ./resolv.conf")
 	flag.StringVar(&remoteAddr, "s", "127.0.0.1:22", "Connect to this ssh server, default to 127.0.0.1:22")
 	flag.StringVar(&remoteUser, "u", os.Getenv("USER"), "Specify user to connect with ssh server")
+	flag.StringVar(&hostKey, "h", "", "Specify hostkey to use with ssh server")
 
 	signal.Notify(shutdownSignal, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGKILL, syscall.SIGTERM)
 
@@ -181,7 +183,7 @@ func bindDNS(addr string, list []string) *dnsServer {
 	reqchan := make(chan *lookupRequest, 1024)
 	go func(c *net.UDPConn, dlist []string, rqch chan *lookupRequest) {
 		for {
-			rdata := make([]byte, 4096)
+			rdata := make([]byte, 576)
 			rlen, rAddr, err := c.ReadFromUDP(rdata)
 			if err != nil {
 				logErr("can not read request: " + err.Error())
@@ -266,7 +268,7 @@ func (ph *proxyHandler) Accept(req *lookupRequest) {
 		return
 	}
 
-	rsp := make([]byte, 4096)
+	rsp := make([]byte, 576)
 	rlen, err := conn.Read(rsp)
 	if err != nil {
 		logErr("query response: " + err.Error())
@@ -380,8 +382,9 @@ func connectSSH(addr string) {
 			return
 		}
 		client, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
-			User: remoteUser,
-			Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
+			User:            remoteUser,
+			Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+			HostKeyCallback: safeHostKeyCallback(),
 		})
 		if err != nil {
 			log.Fatal(err.Error())
@@ -389,6 +392,28 @@ func connectSSH(addr string) {
 		sshClientChannel <- client
 		logInfo("connected to " + addr)
 	}
+}
+
+func safeHostKeyCallback() ssh.HostKeyCallback {
+	var (
+		hk  []byte
+		err error
+		pk  ssh.PublicKey
+	)
+	if hostKey == "" {
+		logErr("no hostKey specified, will skip remote host verification, this might harmful!")
+		return ssh.InsecureIgnoreHostKey()
+	}
+	if hk, err = ioutil.ReadFile(hostKey); err == nil {
+		if pk, err = ssh.ParsePublicKey(hk); err != nil {
+			goto bailOut
+		}
+		return ssh.FixedHostKey(pk)
+	}
+bailOut:
+	logErr("cannot read given hostKey: " + hostKey + ", " + err.Error())
+	logErr("will skip remote host verification, this might harmful!")
+	return ssh.InsecureIgnoreHostKey()
 }
 
 func logErr(msg string) {
