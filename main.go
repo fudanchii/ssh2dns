@@ -39,7 +39,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/fudanchii/edssh"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -371,7 +370,7 @@ func connectSSH(addr string) {
 	if err != nil {
 		log.Fatal(err.Error())
 	}
-	signer, err := edssh.ParsePrivateKey(pk)
+	signer, err := ssh.ParsePrivateKey(pk)
 	if err != nil {
 		log.Fatal(err.Error())
 	}
