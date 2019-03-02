@@ -96,6 +96,7 @@ var (
 	maxEntry    int
 	debug       bool
 	useCache    bool
+	connTimeout int
 )
 
 var (
@@ -103,9 +104,10 @@ var (
 		Entries: make(map[string]cacheEntry),
 		Mutex:   new(sync.Mutex),
 	}
-	shutdownSignal   = make(chan os.Signal, 1)
-	sshClientChannel = make(chan *ssh.Client, 1)
-	sshReconnect     = make(chan bool, 1)
+	shutdownSignal    = make(chan os.Signal, 1)
+	dnsShutdownSignal = make(chan os.Signal, 1)
+	sshClientChannel  = make(chan *ssh.Client, 1)
+	sshReconnect      = make(chan bool, 1)
 )
 
 func init() {
@@ -119,6 +121,7 @@ func init() {
 	flag.StringVar(&remoteAddr, "s", "127.0.0.1:22", "Connect to this ssh server, default to 127.0.0.1:22")
 	flag.StringVar(&remoteUser, "u", os.Getenv("USER"), "Specify user to connect with ssh server")
 	flag.StringVar(&hostKey, "h", "", "Specify hostkey to use with ssh server")
+	flag.IntVar(&connTimeout, "t", 30, "Set timeout for net dial, default to 30 seconds")
 
 	signal.Notify(shutdownSignal, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGKILL, syscall.SIGTERM)
 
@@ -139,6 +142,11 @@ func init() {
 			case <-usr1:
 				debug = !debug
 				logInfo(fmt.Sprintf("debug: %v", debug))
+			case signal := <-shutdownSignal:
+				dnsShutdownSignal <- signal
+				close(hup)
+				close(usr1)
+				return
 			}
 		}
 	}()
@@ -218,14 +226,14 @@ func (ds *dnsServer) Serve(hnd handler) {
 		logInfo("Shutting down...")
 		ds.Listener.Close()
 		close(ds.RequestChannel)
-		wg.Wait()
 		close(sshReconnect)
+		wg.Wait()
 		hnd.Close()
 		logInfo("Bye!")
 	}()
 	for {
 		select {
-		case <-shutdownSignal:
+		case <-dnsShutdownSignal:
 			return
 		case dnsreq := <-ds.RequestChannel:
 			wg.Add(1)
@@ -250,6 +258,8 @@ func (ph *proxyHandler) Accept(req *lookupRequest) {
 		return
 	}
 	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(time.Duration(connTimeout) * time.Second))
 
 	// Need to prepend query length since we get this from UDP
 	// (TCP doesn't need this)
@@ -387,9 +397,13 @@ func connectSSH(addr string) {
 		})
 		if err != nil {
 			log.Fatal(err.Error())
+			if client != nil {
+				client.Close()
+			}
+		} else {
+			sshClientChannel <- client
+			logInfo("connected to " + addr)
 		}
-		sshClientChannel <- client
-		logInfo("connected to " + addr)
 	}
 }
 
