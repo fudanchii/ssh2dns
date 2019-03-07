@@ -24,17 +24,18 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"math/rand"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	_ "github.com/fudanchii/socks5dns/config"
+	"github.com/fudanchii/socks5dns/log"
 	"github.com/fudanchii/socks5dns/proxy"
 	"github.com/miekg/dns"
-	"golang.org/x/crypto/ssh"
+
+	. "github.com/fudanchii/socks5dns/config"
+	"github.com/fudanchii/socks5dns/ssh"
 )
 
 var (
@@ -49,14 +50,19 @@ func main() {
 	flag.Parse()
 	rand.Seed(time.Now().UTC().UnixNano())
 
-	go ssh.Connect(Config.RemoteAddr)
+	log.Info("Starting...")
+
+	go ssh.StartClientPool(Config.RemoteAddr)
 
 	dns.HandleFunc(".", proxy.Handler)
 
 	go func() {
+		proxy.Wait()
+
+		log.Info("Listening...")
 		srv := &dns.Server{Addr: Config.BindAddr, Net: "udp"}
 		if err := srv.ListenAndServe(); err != nil {
-			logErr(err.Error())
+			log.Err(err.Error())
 		}
 	}()
 
@@ -64,15 +70,4 @@ func main() {
 	case <-shutdownSignal:
 		return
 	}
-}
-
-func logErr(msg string) {
-	fmt.Printf("[!] %s\n", msg)
-}
-func logInfo(msg string) {
-	fmt.Printf("[-] %s\n", msg)
-}
-
-func logRaw(label string, msg interface{}) {
-	fmt.Printf("[*] <%s> %q\n", label, msg)
 }

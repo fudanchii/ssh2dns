@@ -4,19 +4,22 @@ import (
 	"io/ioutil"
 	"log"
 
+	. "github.com/fudanchii/socks5dns/config"
+	l "github.com/fudanchii/socks5dns/log"
 	"golang.org/x/crypto/ssh"
 )
 
 var (
-	reconnect     = make(chan bool, 1)
+	reconnect     = make(chan bool, Config.WorkerNum+1)
 	clientChannel = make(chan *ssh.Client, 1)
 )
 
-func Connect(addr string) {
-	pk, err := ioutil.ReadFile(privkeyFile)
+func StartClientPool(addr string) {
+	pk, err := ioutil.ReadFile(Config.PrivkeyFile)
 	if err != nil {
 		log.Fatal(err.Error())
 	}
+
 	signer, err := ssh.ParsePrivateKey(pk)
 	if err != nil {
 		log.Fatal(err.Error())
@@ -24,11 +27,11 @@ func Connect(addr string) {
 
 	for {
 		if _, ok := <-reconnect; !ok {
-			close(sshClientChannel)
+			close(clientChannel)
 			return
 		}
 		client, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
-			User:            remoteUser,
+			User:            Config.RemoteUser,
 			Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 			HostKeyCallback: safeHostKeyCallback(),
 		})
@@ -39,14 +42,14 @@ func Connect(addr string) {
 			}
 		} else {
 			clientChannel <- client
-			logInfo("connected to " + addr)
+			l.Info("connected to " + addr)
 		}
 	}
 }
 
-func Reconnect() *ssh.Client {
+func Connect() *ssh.Client {
 	reconnect <- true
-	<-clientChannel
+	return <-clientChannel
 }
 
 func safeHostKeyCallback() ssh.HostKeyCallback {
@@ -55,18 +58,18 @@ func safeHostKeyCallback() ssh.HostKeyCallback {
 		err error
 		pk  ssh.PublicKey
 	)
-	if hostKey == "" {
-		logErr("no hostKey specified, will skip remote host verification, this might harmful!")
+	if Config.HostKey == "" {
+		l.Err("no hostKey specified, will skip remote host verification, this might harmful!")
 		return ssh.InsecureIgnoreHostKey()
 	}
-	if hk, err = ioutil.ReadFile(hostKey); err == nil {
+	if hk, err = ioutil.ReadFile(Config.HostKey); err == nil {
 		if pk, err = ssh.ParsePublicKey(hk); err != nil {
 			goto bailOut
 		}
 		return ssh.FixedHostKey(pk)
 	}
 bailOut:
-	logErr("cannot read given hostKey: " + hostKey + ", " + err.Error())
-	logErr("will skip remote host verification, this might harmful!")
+	l.Err("cannot read given hostKey: " + Config.HostKey + ", " + err.Error())
+	l.Err("will skip remote host verification, this might harmful!")
 	return ssh.InsecureIgnoreHostKey()
 }
