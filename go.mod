@@ -17,7 +17,7 @@ require (
 	golang.org/x/arch v0.0.0-20190226203302-36aee92af9e8 // indirect
 	golang.org/x/crypto v0.0.0-20190228161510-8dd112bcdc25
 	golang.org/x/net v0.0.0-20190301231341-16b79f2e4e95 // indirect
-	golang.org/x/sync v0.0.0-20181108010431-42b317875d0f // indirect
+	golang.org/x/sync v0.0.0-20181108010431-42b317875d0f
 	golang.org/x/sys v0.0.0-20190307162637-572b51eaf722 // indirect
 	golang.org/x/tools v0.0.0-20190307163923-6a08e3108db3 // indirect
 	google.golang.org/appengine v1.4.0 // indirect
