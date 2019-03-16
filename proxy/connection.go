@@ -71,6 +71,7 @@ func (pc *ProxyConnection) Write(buff []byte) (int, error) {
 	return pc.Conn.Write(nbuff)
 }
 
+// https://github.com/miekg/dns/blob/164b22ef9acc6ebfaef7169ab51caaef67390823/client.go#L262
 // tcpMsgLen is a helper func to read first two bytes of stream as uint16 packet length.
 func tcpMsgLen(t io.Reader) (int, error) {
 	p := []byte{0, 0}
@@ -94,6 +95,7 @@ func tcpMsgLen(t io.Reader) (int, error) {
 	return int(l), nil
 }
 
+// https://github.com/miekg/dns/blob/164b22ef9acc6ebfaef7169ab51caaef67390823/client.go#L291
 // tcpRead calls TCPConn.Read enough times to fill allocated buffer.
 func tcpRead(t io.Reader, p []byte) (int, error) {
 	n, err := t.Read(p)

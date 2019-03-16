@@ -1,6 +1,7 @@
 module github.com/fudanchii/socks5dns
 
 require (
+	github.com/allegro/bigcache v1.2.0
 	github.com/cosiner/argv v0.0.1 // indirect
 	github.com/go-delve/delve v1.2.0 // indirect
 	github.com/konsorten/go-windows-terminal-sequences v1.0.2 // indirect

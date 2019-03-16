@@ -2,8 +2,10 @@ package proxy
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
+	"github.com/fudanchii/socks5dns/cache"
 	"github.com/fudanchii/socks5dns/log"
 	"github.com/miekg/dns"
 	"golang.org/x/crypto/ssh"
@@ -64,9 +66,8 @@ func (w *ProxyWorker) handleRequest(req *ProxyRequest) {
 
 	conn.SetDeadline(time.Now().Add(time.Duration(Config.ConnTimeout) * time.Second))
 
-	logQuestions(req.message)
-
 	dnsConn := &ProxyConnection{Conn: conn}
+
 	if err = dnsConn.WriteMsg(req.message); err != nil {
 		req.errChannel <- fmt.Errorf("error writing DNS request: %s", err.Error())
 		return
@@ -78,14 +79,57 @@ func (w *ProxyWorker) handleRequest(req *ProxyRequest) {
 		return
 	}
 
+	cache.Set(rspMessage)
+
 	req.rspChannel <- rspMessage
 }
 
 func Handler(w dns.ResponseWriter, r *dns.Msg) {
+	var (
+		msg      *dns.Msg
+		err      error
+		cacheHit bool
+	)
+
 	rsp := new(dns.Msg)
 	rsp.SetReply(r)
 
-	genericMsg, err, _ := flightGroup.Do(sflightKey(r), func() (interface{}, error) {
+	start := time.Now()
+
+	// cacheHit will always false if UseCache is false
+	msg, cacheHit = cache.Get(r)
+	if !cacheHit {
+		msg, err = singleFlightRequestHandler(r)
+	}
+
+	end := time.Now()
+
+	if err != nil {
+		log.Err(err.Error())
+		return
+	}
+
+	if len(msg.Answer) > 0 {
+		rsp.Answer = msg.Answer
+	}
+	if len(msg.Ns) > 0 {
+		rsp.Ns = msg.Ns
+	}
+	if len(msg.Extra) > 0 {
+		rsp.Extra = msg.Extra
+	}
+
+	logResponse(rsp, cacheHit, end.Sub(start))
+
+	w.WriteMsg(rsp)
+}
+
+func Wait() {
+	<-waitChannel
+}
+
+func singleFlightRequestHandler(r *dns.Msg) (*dns.Msg, error) {
+	rsp, err, _ := flightGroup.Do(strconv.Itoa(int(r.MsgHdr.Id)), func() (interface{}, error) {
 		rspChannel := make(chan *dns.Msg, 1)
 		errChannel := make(chan error, 1)
 		pReq := ProxyRequest{
@@ -106,28 +150,12 @@ func Handler(w dns.ResponseWriter, r *dns.Msg) {
 
 	})
 
+	// this ensure type assertion below is always success
 	if err != nil {
-		log.Err(err.Error())
-		return
+		return nil, err
 	}
 
-	msg := genericMsg.(*dns.Msg)
-
-	if len(msg.Answer) > 0 {
-		rsp.Answer = msg.Answer
-	}
-	if len(msg.Ns) > 0 {
-		rsp.Ns = msg.Ns
-	}
-	if len(msg.Extra) > 0 {
-		rsp.Extra = msg.Extra
-	}
-
-	w.WriteMsg(rsp)
-}
-
-func Wait() {
-	<-waitChannel
+	return rsp.(*dns.Msg), nil
 }
 
 func selectWorker(r *ProxyRequest, timeout <-chan time.Time) {
@@ -154,8 +182,16 @@ func sflightKey(m *dns.Msg) string {
 	return s
 }
 
-func logQuestions(m *dns.Msg) {
-	for _, q := range m.Question {
-		log.Info(fmt.Sprintf("(%6d) %4s %s", m.MsgHdr.Id, dns.TypeToString[q.Qtype], q.Name))
+func logResponse(m *dns.Msg, cacheHit bool, d time.Duration) {
+	for _, a := range m.Answer {
+		h := a.Header()
+		log.Info(fmt.Sprintf("[%s] (%5d) %4s %s %s", hitOrMiss(cacheHit), m.MsgHdr.Id, dns.TypeToString[h.Rrtype], h.Name, d.String()))
 	}
+}
+
+func hitOrMiss(c bool) string {
+	if c {
+		return "H"
+	}
+	return "M"
 }
