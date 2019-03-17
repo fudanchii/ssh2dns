@@ -13,22 +13,20 @@
 // Options:
 //		-b=<127.0.0.1:53>       Bind to this host and port, default to 127.0.0.1:53
 //		-c                      Enable caching
-//		-d                      Enable debug message
 //		-i=<$HOME/.ssh/id_rsa>  Specify identity file to use when connecting to ssh server
-//		-m=<512>                Set maximum number of cache entries, default to 512
 //		-r=<./resolv.conf>      Specify a file for list of DNS to use, default to ./resolv.conf
 //		-s=<127.0.0.1:22>       Connect to this ssh server, default to 127.0.0.1:22
 //		-u=<$USER>              Specify user to connect with ssh server
+//		-t=<30>                 Duration before connection timeout, in second. Default to 30 seconds.
+//		-dns=<8.8.8.8:53>       Remote DNS server to connect to, target server should accept TCP connection, default to 8.8.8.8:53
 //
 package main
 
 import (
 	"flag"
-	"math/rand"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/fudanchii/socks5dns/log"
 	"github.com/fudanchii/socks5dns/proxy"
@@ -48,7 +46,6 @@ func init() {
 
 func main() {
 	flag.Parse()
-	rand.Seed(time.Now().UTC().UnixNano())
 
 	log.Info("Starting...")
 

@@ -8,14 +8,15 @@ import (
 )
 
 type AppConfig struct {
-	BindAddr    string
-	RemoteAddr  string
-	HostKey     string
-	RemoteUser  string
-	PrivkeyFile string
-	ConnTimeout int
-	WorkerNum   int
-	UseCache    bool
+	BindAddr     string
+	RemoteAddr   string
+	HostKey      string
+	RemoteUser   string
+	PrivkeyFile  string
+	TargetServer string
+	ConnTimeout  int
+	WorkerNum    int
+	UseCache     bool
 }
 
 var Config = AppConfig{}
@@ -27,6 +28,7 @@ func init() {
 	flag.StringVar(&Config.RemoteAddr, "s", "127.0.0.1:22", "Connect to this ssh server, default to 127.0.0.1:22")
 	flag.StringVar(&Config.RemoteUser, "u", os.Getenv("USER"), "Specify user to connect with ssh server")
 	flag.StringVar(&Config.HostKey, "h", "", "Specify hostkey to use with ssh server")
+	flag.StringVar(&Config.TargetServer, "dns", "8.8.8.8:53", "Remote DNS server to connect to, should accept TCP connection, default to 8.8.8.8:53")
 	flag.IntVar(&Config.ConnTimeout, "t", 30, "Set timeout for net dial, default to 30 seconds")
 	flag.IntVar(&Config.WorkerNum, "w", runtime.NumCPU(), "Set the number of worker to run as ssh client, default to number of cpu")
 	flag.BoolVar(&Config.UseCache, "c", false, "Use cache, default to false")

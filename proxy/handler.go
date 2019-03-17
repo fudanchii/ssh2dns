@@ -56,7 +56,7 @@ type ProxyWorker struct {
 }
 
 func (w *ProxyWorker) handleRequest(req *ProxyRequest) {
-	conn, err := w.sshClient.Dial("tcp", "8.8.8.8:53")
+	conn, err := w.sshClient.Dial("tcp", Config.TargetServer)
 	if err != nil {
 		req.errChannel <- fmt.Errorf("error dialing DNS: %s", err.Error())
 		return
