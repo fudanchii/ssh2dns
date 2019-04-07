@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"fmt"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -159,18 +160,23 @@ func singleFlightRequestHandler(r *dns.Msg) (*dns.Msg, error) {
 }
 
 func selectWorker(r *ProxyRequest, timeout <-chan time.Time) {
-	for {
-		for _, worker := range workers {
-			select {
-			case <-timeout:
-				r.errChannel <- fmt.Errorf("timeout waiting in queue")
-				return
-			case worker.reqChannel <- r:
-				return
-			case <-time.After(10 * time.Microsecond):
-				continue
-			}
+	cases := make([]reflect.SelectCase, len(workers)+1)
+	cases[0] = reflect.SelectCase{
+		Dir:  reflect.SelectRecv,
+		Chan: reflect.ValueOf(timeout),
+		Send: reflect.ValueOf(nil),
+	}
+
+	for x, worker := range workers {
+		cases[x+1] = reflect.SelectCase{
+			Dir:  reflect.SelectSend,
+			Chan: reflect.ValueOf(worker.reqChannel),
+			Send: reflect.ValueOf(r),
 		}
+	}
+
+	if chosen, _, _ := reflect.Select(cases); chosen == 0 {
+		r.errChannel <- fmt.Errorf("timeout")
 	}
 }
 
