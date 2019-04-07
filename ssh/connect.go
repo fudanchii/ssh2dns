@@ -25,11 +25,7 @@ func StartClientPool(addr string) {
 		log.Fatal(err.Error())
 	}
 
-	for {
-		if _, ok := <-reconnect; !ok {
-			close(clientChannel)
-			return
-		}
+	for _ = range reconnect {
 		client, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
 			User:            Config.RemoteUser,
 			Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
