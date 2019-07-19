@@ -23,7 +23,6 @@
 package main
 
 import (
-	"flag"
 	"os"
 	"os/signal"
 	"syscall"
@@ -45,8 +44,6 @@ func init() {
 }
 
 func main() {
-	flag.Parse()
-
 	log.Info("Starting...")
 
 	go ssh.StartClientPool(Config.RemoteAddr)

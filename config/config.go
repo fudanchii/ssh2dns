@@ -32,4 +32,6 @@ func init() {
 	flag.IntVar(&Config.ConnTimeout, "t", 30, "Set timeout for net dial, default to 30 seconds")
 	flag.IntVar(&Config.WorkerNum, "w", runtime.NumCPU(), "Set the number of worker to run as ssh client, default to number of cpu")
 	flag.BoolVar(&Config.UseCache, "c", false, "Use cache, default to false")
+
+	flag.Parse()
 }
