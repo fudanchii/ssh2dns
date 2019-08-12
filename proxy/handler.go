@@ -191,7 +191,7 @@ func sflightKey(m *dns.Msg) string {
 func logResponse(m *dns.Msg, cacheHit bool, d time.Duration) {
 	for _, a := range m.Answer {
 		h := a.Header()
-		log.Info(fmt.Sprintf("[%s] (%5d) %4s %s %s", hitOrMiss(cacheHit), m.MsgHdr.Id, dns.TypeToString[h.Rrtype], h.Name, d.String()))
+		log.Info(fmt.Sprintf("[%s] (%5d) %5s %s %s", hitOrMiss(cacheHit), m.MsgHdr.Id, dns.TypeToString[h.Rrtype], h.Name, d.String()))
 	}
 }
 
