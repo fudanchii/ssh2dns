@@ -40,7 +40,7 @@ var (
 )
 
 func init() {
-	signal.Notify(shutdownSignal, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGKILL, syscall.SIGTERM)
+	signal.Notify(shutdownSignal, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM)
 }
 
 func main() {
@@ -60,8 +60,5 @@ func main() {
 		}
 	}()
 
-	select {
-	case <-shutdownSignal:
-		return
-	}
+	<-shutdownSignal
 }

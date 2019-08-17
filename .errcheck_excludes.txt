@@ -1,0 +1,1 @@
+(*github.com/allegro/bigcache.BigCache).Set

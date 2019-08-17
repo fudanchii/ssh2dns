@@ -1,0 +1,2 @@
+[linters-settings.errcheck]
+exclude = ".errcheck_excludes.txt"

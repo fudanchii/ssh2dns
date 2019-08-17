@@ -30,7 +30,7 @@ var (
 
 func init() {
 	go func() {
-		for i, _ := range workers {
+		for i := range workers {
 			workers[i] = &ProxyWorker{
 				sshClient:  sh.Connect(),
 				reqChannel: make(chan *ProxyRequest),
@@ -65,7 +65,11 @@ func (w *ProxyWorker) handleRequest(req *ProxyRequest) {
 
 	defer conn.Close()
 
-	conn.SetDeadline(time.Now().Add(time.Duration(Config.ConnTimeout) * time.Second))
+	err = conn.SetDeadline(time.Now().Add(time.Duration(Config.ConnTimeout) * time.Second))
+	if err != nil {
+		req.errChannel <- fmt.Errorf("error setting connection timeout: %s", err.Error())
+		return
+	}
 
 	dnsConn := &ProxyConnection{Conn: conn}
 
@@ -122,7 +126,10 @@ func Handler(w dns.ResponseWriter, r *dns.Msg) {
 
 	logResponse(rsp, cacheHit, end.Sub(start))
 
-	w.WriteMsg(rsp)
+	if err = w.WriteMsg(rsp); err != nil {
+		log.Err(err.Error())
+		return
+	}
 }
 
 func Wait() {
@@ -178,14 +185,6 @@ func selectWorker(r *ProxyRequest, timeout <-chan time.Time) {
 	if chosen, _, _ := reflect.Select(cases); chosen == 0 {
 		r.errChannel <- fmt.Errorf("timeout")
 	}
-}
-
-func sflightKey(m *dns.Msg) string {
-	s := ""
-	for _, q := range m.Question {
-		s = fmt.Sprintf("%s%s%s", s, dns.TypeToString[q.Qtype], q.Name)
-	}
-	return s
 }
 
 func logResponse(m *dns.Msg, cacheHit bool, d time.Duration) {
