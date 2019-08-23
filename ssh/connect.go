@@ -4,18 +4,27 @@ import (
 	"io/ioutil"
 	"log"
 
-	. "github.com/fudanchii/socks5dns/config"
+	"github.com/fudanchii/socks5dns/config"
 	l "github.com/fudanchii/socks5dns/log"
 	"golang.org/x/crypto/ssh"
 )
 
-var (
-	reconnect     = make(chan bool, Config.WorkerNum+1)
-	clientChannel = make(chan *ssh.Client, 1)
-)
+type ClientPool struct {
+	reconnect     chan bool
+	clientChannel chan *ssh.Client
+	config        *config.AppConfig
+}
 
-func StartClientPool(addr string) {
-	pk, err := ioutil.ReadFile(Config.PrivkeyFile)
+func NewClientPool(cfg *config.AppConfig) *ClientPool {
+	return &ClientPool{
+		reconnect:     make(chan bool, cfg.WorkerNum()+1),
+		clientChannel: make(chan *ssh.Client, 1),
+		config:        cfg,
+	}
+}
+
+func (cp *ClientPool) StartClientPool() {
+	pk, err := ioutil.ReadFile(cp.config.PrivKeyFile())
 	if err != nil {
 		log.Fatal(err.Error())
 	}
@@ -25,11 +34,11 @@ func StartClientPool(addr string) {
 		log.Fatal(err.Error())
 	}
 
-	for range reconnect {
-		client, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
-			User:            Config.RemoteUser,
+	for range cp.reconnect {
+		client, err := ssh.Dial("tcp", cp.config.RemoteAddr(), &ssh.ClientConfig{
+			User:            cp.config.RemoteUser(),
 			Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-			HostKeyCallback: safeHostKeyCallback(),
+			HostKeyCallback: cp.safeHostKeyCallback(),
 		})
 		if err != nil {
 			log.Fatal(err.Error())
@@ -37,35 +46,39 @@ func StartClientPool(addr string) {
 				client.Close()
 			}
 		} else {
-			clientChannel <- client
-			l.Info("connected to " + addr)
+			cp.clientChannel <- client
+			l.Info("connected to " + cp.config.RemoteAddr())
 		}
 	}
 }
 
-func Connect() *ssh.Client {
-	reconnect <- true
-	return <-clientChannel
+func (cp *ClientPool) Connect() *ssh.Client {
+	cp.reconnect <- true
+	return <-cp.clientChannel
 }
 
-func safeHostKeyCallback() ssh.HostKeyCallback {
+func (cp *ClientPool) safeHostKeyCallback() ssh.HostKeyCallback {
 	var (
 		hk  []byte
 		err error
 		pk  ssh.PublicKey
 	)
-	if Config.HostKey == "" {
+	if cp.config.HostKey() == "" {
 		l.Err("no hostKey specified, will skip remote host verification, this might harmful!")
+
+		/* #nosec G106 */
 		return ssh.InsecureIgnoreHostKey()
 	}
-	if hk, err = ioutil.ReadFile(Config.HostKey); err == nil {
+	if hk, err = ioutil.ReadFile(cp.config.HostKey()); err == nil {
 		if pk, err = ssh.ParsePublicKey(hk); err != nil {
 			goto bailOut
 		}
 		return ssh.FixedHostKey(pk)
 	}
 bailOut:
-	l.Err("cannot read given hostKey: " + Config.HostKey + ", " + err.Error())
+	l.Err("cannot read given hostKey: " + cp.config.HostKey() + ", " + err.Error())
 	l.Err("will skip remote host verification, this might harmful!")
+
+	/* #nosec G106 */
 	return ssh.InsecureIgnoreHostKey()
 }

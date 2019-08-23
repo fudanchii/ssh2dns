@@ -3,51 +3,53 @@ package cache
 import (
 	"time"
 
-	. "github.com/fudanchii/socks5dns/config"
+	"github.com/fudanchii/socks5dns/config"
 
 	"github.com/allegro/bigcache"
 	"github.com/miekg/dns"
 )
 
-var (
-	cache *bigcache.BigCache
-)
-
-func init() {
-	cache, _ = bigcache.NewBigCache(bigcache.DefaultConfig(10 * time.Minute))
+type Cache struct {
+	bc     *bigcache.BigCache
+	config *config.AppConfig
 }
 
-func Get(r *dns.Msg) (*dns.Msg, bool) {
-	if !Config.UseCache {
+func New(cfg *config.AppConfig) *Cache {
+	cache, _ := bigcache.NewBigCache(bigcache.DefaultConfig(10 * time.Minute))
+	return &Cache{cache, cfg}
+}
+
+func (cache *Cache) Get(msg *dns.Msg) (*dns.Msg, bool) {
+	if !cache.config.UseCache() {
 		return nil, false
 	}
 
-	r.Answer = []dns.RR{}
-	for _, q := range r.Question {
-		cval, err := cache.Get(keying(q.Name, q.Qtype))
+	msg.Answer = []dns.RR{}
+	for _, question := range msg.Question {
+		cacheval, err := cache.bc.Get(keying(question.Name, question.Qtype))
 		if err != nil {
 			return nil, false
 		}
 
-		rr, err := dns.NewRR(string(cval))
+		rr, err := dns.NewRR(string(cacheval))
 		if err != nil {
 			return nil, false
 		}
 
-		r.Answer = append(r.Answer, rr)
+		msg.Answer = append(msg.Answer, rr)
 	}
 
-	return r, true
+	return msg, true
 }
 
-func Set(m *dns.Msg) {
-	if !Config.UseCache {
+func (cache *Cache) Set(msg *dns.Msg) {
+	if !cache.config.UseCache() {
 		return
 	}
 
-	for _, a := range m.Answer {
-		h := a.Header()
-		cache.Set(keying(h.Name, h.Rrtype), []byte(a.String()))
+	for _, answer := range msg.Answer {
+		header := answer.Header()
+		cache.bc.Set(keying(header.Name, header.Rrtype), []byte(answer.String()))
 	}
 }
 

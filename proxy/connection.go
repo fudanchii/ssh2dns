@@ -8,12 +8,12 @@ import (
 	"github.com/miekg/dns"
 )
 
-type ProxyConnection struct {
+type Connection struct {
 	net.Conn
 }
 
 // https://github.com/miekg/dns/blob/164b22ef9acc6ebfaef7169ab51caaef67390823/client.go#L191
-func (pc *ProxyConnection) ReadMsg() (*dns.Msg, error) {
+func (pc *Connection) ReadMsg() (*dns.Msg, error) {
 	p, err := pc.ReadMsgHdr(nil)
 
 	if err != nil {
@@ -33,7 +33,7 @@ func (pc *ProxyConnection) ReadMsg() (*dns.Msg, error) {
 }
 
 // https://github.com/miekg/dns/blob/164b22ef9acc6ebfaef7169ab51caaef67390823/client.go#L217
-func (pc *ProxyConnection) ReadMsgHdr(h *dns.Header) ([]byte, error) {
+func (pc *Connection) ReadMsgHdr(h *dns.Header) ([]byte, error) {
 	l, err := tcpMsgLen(pc)
 
 	if err != nil {
@@ -47,7 +47,7 @@ func (pc *ProxyConnection) ReadMsgHdr(h *dns.Header) ([]byte, error) {
 }
 
 // https://github.com/miekg/dns/blob/164b22ef9acc6ebfaef7169ab51caaef67390823/client.go#L334
-func (pc *ProxyConnection) WriteMsg(msg *dns.Msg) error {
+func (pc *Connection) WriteMsg(msg *dns.Msg) error {
 	var (
 		out []byte
 		err error
@@ -63,7 +63,7 @@ func (pc *ProxyConnection) WriteMsg(msg *dns.Msg) error {
 	return err
 }
 
-func (pc *ProxyConnection) Write(buff []byte) (int, error) {
+func (pc *Connection) Write(buff []byte) (int, error) {
 	l := len(buff)
 	nbuff := make([]byte, 2, l+2)
 	binary.BigEndian.PutUint16(nbuff, uint16(l))

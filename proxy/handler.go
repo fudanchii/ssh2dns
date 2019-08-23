@@ -12,52 +12,24 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/sync/singleflight"
 
-	. "github.com/fudanchii/socks5dns/config"
+	"github.com/fudanchii/socks5dns/config"
 	sh "github.com/fudanchii/socks5dns/ssh"
 )
 
-type ProxyRequest struct {
+type proxyRequest struct {
 	message    *dns.Msg
 	rspChannel chan *dns.Msg
 	errChannel chan error
 }
 
-var (
-	workers     = make([]*ProxyWorker, Config.WorkerNum)
-	waitChannel = make(chan bool)
-	flightGroup = singleflight.Group{}
-)
-
-func init() {
-	go func() {
-		for i := range workers {
-			workers[i] = &ProxyWorker{
-				sshClient:  sh.Connect(),
-				reqChannel: make(chan *ProxyRequest),
-			}
-		}
-
-		log.Info(fmt.Sprintf("running %d worker connections", Config.WorkerNum))
-
-		for _, worker := range workers {
-			go func(worker *ProxyWorker) {
-				for request := range worker.reqChannel {
-					worker.handleRequest(request)
-				}
-			}(worker)
-		}
-
-		waitChannel <- true
-	}()
-}
-
-type ProxyWorker struct {
+type proxyWorker struct {
 	sshClient  *ssh.Client
-	reqChannel chan *ProxyRequest
+	reqChannel chan *proxyRequest
+	config     *config.AppConfig
 }
 
-func (w *ProxyWorker) handleRequest(req *ProxyRequest) {
-	conn, err := w.sshClient.Dial("tcp", Config.TargetServer)
+func (w *proxyWorker) handleRequest(req *proxyRequest, proxy *Proxy) {
+	conn, err := w.sshClient.Dial("tcp", w.config.TargetServer())
 	if err != nil {
 		req.errChannel <- fmt.Errorf("error dialing DNS: %s", err.Error())
 		return
@@ -65,13 +37,13 @@ func (w *ProxyWorker) handleRequest(req *ProxyRequest) {
 
 	defer conn.Close()
 
-	err = conn.SetDeadline(time.Now().Add(time.Duration(Config.ConnTimeout) * time.Second))
+	err = conn.SetDeadline(time.Now().Add(time.Duration(w.config.ConnTimeout()) * time.Second))
 	if err != nil {
 		req.errChannel <- fmt.Errorf("error setting connection timeout: %s", err.Error())
 		return
 	}
 
-	dnsConn := &ProxyConnection{Conn: conn}
+	dnsConn := &Connection{Conn: conn}
 
 	if err = dnsConn.WriteMsg(req.message); err != nil {
 		req.errChannel <- fmt.Errorf("error writing DNS request: %s", err.Error())
@@ -84,12 +56,55 @@ func (w *ProxyWorker) handleRequest(req *ProxyRequest) {
 		return
 	}
 
-	cache.Set(rspMessage)
+	proxy.cache.Set(rspMessage)
 
 	req.rspChannel <- rspMessage
 }
 
-func Handler(w dns.ResponseWriter, r *dns.Msg) {
+type Proxy struct {
+	workers     []*proxyWorker
+	waitChannel chan bool
+	flightGroup singleflight.Group
+	config      *config.AppConfig
+	cache       *cache.Cache
+	clientPool  *sh.ClientPool
+}
+
+func New(cfg *config.AppConfig, clientPool *sh.ClientPool) *Proxy {
+	var proxy = Proxy{
+		workers:     make([]*proxyWorker, cfg.WorkerNum()),
+		waitChannel: make(chan bool, 1),
+		config:      cfg,
+		cache:       cache.New(cfg),
+		clientPool:  clientPool,
+	}
+
+	go func(proxy *Proxy) {
+		for i := range proxy.workers {
+			proxy.workers[i] = &proxyWorker{
+				sshClient:  proxy.clientPool.Connect(),
+				reqChannel: make(chan *proxyRequest),
+				config:     proxy.config,
+			}
+		}
+
+		log.Info(fmt.Sprintf("running %d worker connections", cfg.WorkerNum()))
+
+		for _, worker := range proxy.workers {
+			go func(worker *proxyWorker) {
+				for request := range worker.reqChannel {
+					worker.handleRequest(request, proxy)
+				}
+			}(worker)
+		}
+
+		proxy.waitChannel <- true
+	}(&proxy)
+
+	return &proxy
+}
+
+func (proxy *Proxy) Handler(w dns.ResponseWriter, r *dns.Msg) {
 	var (
 		msg      *dns.Msg
 		err      error
@@ -102,9 +117,9 @@ func Handler(w dns.ResponseWriter, r *dns.Msg) {
 	start := time.Now()
 
 	// cacheHit will always false if UseCache is false
-	msg, cacheHit = cache.Get(r)
+	msg, cacheHit = proxy.cache.Get(r)
 	if !cacheHit {
-		msg, err = singleFlightRequestHandler(r)
+		msg, err = proxy.singleFlightRequestHandler(r)
 	}
 
 	end := time.Now()
@@ -132,22 +147,22 @@ func Handler(w dns.ResponseWriter, r *dns.Msg) {
 	}
 }
 
-func Wait() {
-	<-waitChannel
+func (proxy *Proxy) Wait() {
+	<-proxy.waitChannel
 }
 
-func singleFlightRequestHandler(r *dns.Msg) (*dns.Msg, error) {
-	rsp, err, _ := flightGroup.Do(strconv.Itoa(int(r.MsgHdr.Id)), func() (interface{}, error) {
+func (proxy *Proxy) singleFlightRequestHandler(r *dns.Msg) (*dns.Msg, error) {
+	rsp, err, _ := proxy.flightGroup.Do(strconv.Itoa(int(r.MsgHdr.Id)), func() (interface{}, error) {
 		rspChannel := make(chan *dns.Msg, 1)
 		errChannel := make(chan error, 1)
-		pReq := ProxyRequest{
+		pReq := proxyRequest{
 			message:    r,
 			rspChannel: rspChannel,
 			errChannel: errChannel,
 		}
-		timeout := time.After(time.Duration(Config.ConnTimeout) * time.Second)
+		timeout := time.After(time.Duration(proxy.config.ConnTimeout()) * time.Second)
 
-		go selectWorker(&pReq, timeout)
+		go proxy.selectWorker(&pReq, timeout)
 
 		select {
 		case msg := <-rspChannel:
@@ -166,15 +181,15 @@ func singleFlightRequestHandler(r *dns.Msg) (*dns.Msg, error) {
 	return rsp.(*dns.Msg), nil
 }
 
-func selectWorker(r *ProxyRequest, timeout <-chan time.Time) {
-	cases := make([]reflect.SelectCase, len(workers)+1)
+func (proxy *Proxy) selectWorker(r *proxyRequest, timeout <-chan time.Time) {
+	cases := make([]reflect.SelectCase, len(proxy.workers)+1)
 	cases[0] = reflect.SelectCase{
 		Dir:  reflect.SelectRecv,
 		Chan: reflect.ValueOf(timeout),
 		Send: reflect.ValueOf(nil),
 	}
 
-	for x, worker := range workers {
+	for x, worker := range proxy.workers {
 		cases[x+1] = reflect.SelectCase{
 			Dir:  reflect.SelectSend,
 			Chan: reflect.ValueOf(worker.reqChannel),
@@ -190,7 +205,14 @@ func selectWorker(r *ProxyRequest, timeout <-chan time.Time) {
 func logResponse(m *dns.Msg, cacheHit bool, d time.Duration) {
 	for _, a := range m.Answer {
 		h := a.Header()
-		log.Info(fmt.Sprintf("[%s] (%5d) %5s %s %s", hitOrMiss(cacheHit), m.MsgHdr.Id, dns.TypeToString[h.Rrtype], h.Name, d.String()))
+		log.Info(fmt.Sprintf(
+			"[%s] (%5d) %5s %s %s",
+			hitOrMiss(cacheHit),
+			m.MsgHdr.Id,
+			dns.TypeToString[h.Rrtype],
+			h.Name,
+			d.String(),
+		))
 	}
 }
 
