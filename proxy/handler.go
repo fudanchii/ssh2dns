@@ -37,7 +37,6 @@ func (w *proxyWorker) handleRequest(req *proxyRequest, proxy *Proxy) {
 
 	defer conn.Close()
 
-	err = conn.SetDeadline(time.Now().Add(time.Duration(w.config.ConnTimeout()) * time.Second))
 	if err != nil {
 		req.errChannel <- fmt.Errorf("error setting connection timeout: %s", err.Error())
 		return
