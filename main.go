@@ -30,11 +30,6 @@ import (
 	"syscall"
 
 	"github.com/fudanchii/socks5dns/log"
-	"github.com/fudanchii/socks5dns/proxy"
-	"github.com/miekg/dns"
-
-	"github.com/fudanchii/socks5dns/config"
-	"github.com/fudanchii/socks5dns/ssh"
 )
 
 func main() {
@@ -43,23 +38,7 @@ func main() {
 
 	log.Info("Starting...")
 
-	cfg := config.New()
-
-	clientPool := ssh.NewClientPool(cfg)
-	go clientPool.StartClientPool()
-
-	dnsProxy := proxy.New(cfg, clientPool)
-	dns.HandleFunc(".", dnsProxy.Handler)
-
-	go func(cfg *config.AppConfig, proxy *proxy.Proxy) {
-		proxy.Wait()
-
-		log.Info("Listening...")
-		srv := &dns.Server{Addr: cfg.BindAddr(), Net: "udp"}
-		if err := srv.ListenAndServe(); err != nil {
-			log.Err(err.Error())
-		}
-	}(cfg, dnsProxy)
+	setupAppContainer().Invoke(appStart)
 
 	<-shutdownSignal
 }

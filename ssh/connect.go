@@ -16,11 +16,13 @@ type ClientPool struct {
 }
 
 func NewClientPool(cfg *config.AppConfig) *ClientPool {
-	return &ClientPool{
+	cp := &ClientPool{
 		reconnect:     make(chan bool, cfg.WorkerNum()+1),
 		clientChannel: make(chan *ssh.Client, 1),
 		config:        cfg,
 	}
+	go cp.StartClientPool()
+	return cp
 }
 
 func (cp *ClientPool) StartClientPool() {

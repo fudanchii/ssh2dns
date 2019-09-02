@@ -103,7 +103,7 @@ func New(cfg *config.AppConfig, clientPool *sh.ClientPool) *Proxy {
 	return &proxy
 }
 
-func (proxy *Proxy) Handler(w dns.ResponseWriter, r *dns.Msg) {
+func (proxy *Proxy) handler(w dns.ResponseWriter, r *dns.Msg) {
 	var (
 		msg      *dns.Msg
 		err      error
@@ -148,6 +148,12 @@ func (proxy *Proxy) Handler(w dns.ResponseWriter, r *dns.Msg) {
 
 func (proxy *Proxy) Wait() {
 	<-proxy.waitChannel
+}
+
+func (proxy *Proxy) ListenAndServe() error {
+	dns.HandleFunc(".", proxy.handler)
+	srv := &dns.Server{Addr: proxy.config.BindAddr(), Net: "udp"}
+	return srv.ListenAndServe()
 }
 
 func (proxy *Proxy) singleFlightRequestHandler(r *dns.Msg) (*dns.Msg, error) {
