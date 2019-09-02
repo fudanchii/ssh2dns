@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+
 	"github.com/fudanchii/socks5dns/config"
 	"github.com/fudanchii/socks5dns/log"
 	"github.com/fudanchii/socks5dns/proxy"
@@ -17,11 +19,25 @@ type Dependencies struct {
 }
 
 func setupAppContainer() *dig.Container {
+	var err error
+
 	container := dig.New()
 	{
-		container.Provide(config.New)
-		container.Provide(ssh.NewClientPool)
-		container.Provide(proxy.New)
+		if err = container.Provide(config.New); err != nil {
+			log.Err(err.Error())
+		}
+
+		if err = container.Provide(ssh.NewClientPool); err != nil {
+			log.Err(err.Error())
+		}
+
+		if err = container.Provide(proxy.New); err != nil {
+			log.Err(err.Error())
+		}
+	}
+
+	if err != nil {
+		os.Exit(1)
 	}
 	return container
 }

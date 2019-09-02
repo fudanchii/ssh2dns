@@ -38,7 +38,10 @@ func main() {
 
 	log.Info("Starting...")
 
-	setupAppContainer().Invoke(appStart)
+	if err := setupAppContainer().Invoke(appStart); err != nil {
+		log.Err(err.Error())
+		os.Exit(1)
+	}
 
 	<-shutdownSignal
 }
