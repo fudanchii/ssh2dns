@@ -18,9 +18,11 @@ type Dependencies struct {
 
 func setupAppContainer() *dig.Container {
 	container := dig.New()
-	container.Provide(config.New)
-	container.Provide(ssh.NewClientPool)
-	container.Provide(proxy.New)
+	{
+		container.Provide(config.New)
+		container.Provide(ssh.NewClientPool)
+		container.Provide(proxy.New)
+	}
 	return container
 }
 

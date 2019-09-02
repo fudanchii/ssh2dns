@@ -37,13 +37,7 @@ func (w *proxyWorker) handleRequest(req *proxyRequest, proxy *Proxy) {
 
 	defer conn.Close()
 
-	if err != nil {
-		req.errChannel <- fmt.Errorf("error setting connection timeout: %s", err.Error())
-		return
-	}
-
 	dnsConn := &Connection{Conn: conn}
-
 	if err = dnsConn.WriteMsg(req.message); err != nil {
 		req.errChannel <- fmt.Errorf("error writing DNS request: %s", err.Error())
 		return
