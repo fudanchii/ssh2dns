@@ -8,21 +8,23 @@ import (
 )
 
 type AppConfig struct {
-	bindAddr     string
-	remoteAddr   string
-	hostKey      string
-	remoteUser   string
-	privkeyFile  string
-	targetServer string
-	connTimeout  int
-	workerNum    int
-	useCache     bool
+	bindAddr        string
+	remoteAddr      string
+	hostKey         string
+	remoteUser      string
+	privkeyFile     string
+	targetServer    string
+	connTimeout     int
+	workerNum       int
+	useCache        bool
+	doNotVerifyHost bool
 }
 
 func New() *AppConfig {
 	var config AppConfig
 
 	defrsa := path.Join(os.Getenv("HOME"), ".ssh/id_rsa")
+	knownHosts := path.Join(os.Getenv("HOME"), ".ssh/known_hosts")
 
 	flag.StringVar(
 		&config.bindAddr,
@@ -46,7 +48,7 @@ func New() *AppConfig {
 	)
 	flag.StringVar(
 		&config.hostKey,
-		"h", "",
+		"h", knownHosts,
 		"Specify hostkey to use with ssh server",
 	)
 	flag.StringVar(
@@ -68,6 +70,11 @@ func New() *AppConfig {
 		&config.useCache,
 		"c", false,
 		"Use cache, default to false",
+	)
+	flag.BoolVar(
+		&config.doNotVerifyHost,
+		"x", false,
+		"Skip host key verification, makes you vulnerable to man-in-the-middle attack!",
 	)
 
 	flag.Parse()
@@ -109,4 +116,8 @@ func (c *AppConfig) WorkerNum() int {
 
 func (c *AppConfig) UseCache() bool {
 	return c.useCache
+}
+
+func (c *AppConfig) DoNotVerifyHost() bool {
+	return c.doNotVerifyHost
 }

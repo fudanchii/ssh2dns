@@ -1,8 +1,12 @@
 package ssh
 
 import (
+	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
+	"net"
+	"strings"
 
 	"github.com/fudanchii/socks5dns/config"
 	l "github.com/fudanchii/socks5dns/log"
@@ -61,26 +65,48 @@ func (cp *ClientPool) Connect() *ssh.Client {
 
 func (cp *ClientPool) safeHostKeyCallback() ssh.HostKeyCallback {
 	var (
-		hk  []byte
-		err error
-		pk  ssh.PublicKey
+		err    error
+		hk     []byte
+		marker string
+		hosts  []string
+		pk     ssh.PublicKey
 	)
-	if cp.config.HostKey() == "" {
-		l.Err("no hostKey specified, will skip remote host verification, this might harmful!")
+
+	if cp.config.DoNotVerifyHost() {
+		l.Err("Will skip remote host verification, this might harmful!")
 
 		/* #nosec G106 */
 		return ssh.InsecureIgnoreHostKey()
 	}
+
+	// HostKey is in known_host format
 	if hk, err = ioutil.ReadFile(cp.config.HostKey()); err == nil {
-		if pk, err = ssh.ParsePublicKey(hk); err != nil {
-			goto bailOut
+		for {
+			marker, hosts, pk, _, hk, err = ssh.ParseKnownHosts(hk)
+			if err == io.EOF {
+				err = fmt.Errorf("No valid key found for host: " + cp.config.RemoteAddr())
+				goto bailOut
+			}
+
+			if err != nil {
+				goto bailOut
+			}
+
+			for _, host := range hosts {
+				host = strings.ReplaceAll(host, "[", "")
+				host = strings.ReplaceAll(host, "]", "")
+				if host == cp.config.RemoteAddr() {
+					if marker == "revoked" {
+						err = fmt.Errorf("Found valid key for this host, but the key has been revoked.")
+						goto bailOut
+					}
+					return ssh.FixedHostKey(pk)
+				}
+			}
 		}
-		return ssh.FixedHostKey(pk)
 	}
 bailOut:
-	l.Err("cannot read given hostKey: " + cp.config.HostKey() + ", " + err.Error())
-	l.Err("will skip remote host verification, this might harmful!")
-
-	/* #nosec G106 */
-	return ssh.InsecureIgnoreHostKey()
+	return func(host string, remote net.Addr, p ssh.PublicKey) error {
+		return err
+	}
 }
