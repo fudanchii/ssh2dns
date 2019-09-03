@@ -97,7 +97,7 @@ func (cp *ClientPool) safeHostKeyCallback() ssh.HostKeyCallback {
 				host = strings.ReplaceAll(host, "]", "")
 				if host == cp.config.RemoteAddr() {
 					if marker == "revoked" {
-						err = fmt.Errorf("Found valid key for this host, but the key has been revoked.")
+						err = fmt.Errorf("found valid key for this host, but the key has been revoked")
 						goto bailOut
 					}
 					return ssh.FixedHostKey(pk)
