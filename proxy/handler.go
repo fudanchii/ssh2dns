@@ -63,16 +63,18 @@ type Proxy struct {
 	clientPool  *sh.ClientPool
 }
 
-func New(cfg *config.AppConfig, clientPool *sh.ClientPool) *Proxy {
+func New(cfg *config.AppConfig, clientPool *sh.ClientPool, cachee *cache.Cache) *Proxy {
 	var proxy = Proxy{
 		workers:     make([]*proxyWorker, cfg.WorkerNum()),
 		waitChannel: make(chan bool, 1),
 		config:      cfg,
-		cache:       cache.New(cfg),
+		cache:       cachee,
 		clientPool:  clientPool,
 	}
 
 	go func(proxy *Proxy) {
+		log.Info(fmt.Sprintf("running %d worker connections", cfg.WorkerNum()))
+
 		for i := range proxy.workers {
 			proxy.workers[i] = &proxyWorker{
 				sshClient:  proxy.clientPool.Connect(),
@@ -80,8 +82,6 @@ func New(cfg *config.AppConfig, clientPool *sh.ClientPool) *Proxy {
 				config:     proxy.config,
 			}
 		}
-
-		log.Info(fmt.Sprintf("running %d worker connections", cfg.WorkerNum()))
 
 		for _, worker := range proxy.workers {
 			go func(worker *proxyWorker) {

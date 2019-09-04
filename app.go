@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 
+	"github.com/fudanchii/socks5dns/cache"
 	"github.com/fudanchii/socks5dns/config"
 	"github.com/fudanchii/socks5dns/log"
 	"github.com/fudanchii/socks5dns/proxy"
@@ -36,6 +37,7 @@ func (c *container) provide(cons ...interface{}) *dig.Container {
 func setupAppContainer() *dig.Container {
 	return (&container{dig.New()}).provide(
 		config.New,
+		cache.New,
 		ssh.NewClientPool,
 		proxy.New,
 	)
