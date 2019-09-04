@@ -40,11 +40,12 @@ func (cp *ClientPool) StartClientPool() {
 		log.Fatal(err.Error())
 	}
 
+	hostKeyCB := cp.safeHostKeyCallback()
 	for range cp.reconnect {
 		client, err := ssh.Dial("tcp", cp.config.RemoteAddr(), &ssh.ClientConfig{
 			User:            cp.config.RemoteUser(),
 			Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-			HostKeyCallback: cp.safeHostKeyCallback(),
+			HostKeyCallback: hostKeyCB,
 		})
 		if err != nil {
 			log.Fatal(err.Error())
@@ -97,9 +98,14 @@ func (cp *ClientPool) safeHostKeyCallback() ssh.HostKeyCallback {
 				host = strings.ReplaceAll(host, "]", "")
 				if host == cp.config.RemoteAddr() {
 					if marker == "revoked" {
-						err = fmt.Errorf("found valid key for this host, but the key has been revoked")
+						err = fmt.Errorf(
+							"found valid key for %s, but the key has been revoked",
+							cp.config.RemoteAddr(),
+						)
 						goto bailOut
 					}
+					l.Info("Found valid host key for " + cp.config.RemoteAddr())
+					l.Info("fingerprint: " + ssh.FingerprintSHA256(pk))
 					return ssh.FixedHostKey(pk)
 				}
 			}
