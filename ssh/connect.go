@@ -4,12 +4,11 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net"
 	"strings"
 
 	"github.com/fudanchii/socks5dns/config"
-	l "github.com/fudanchii/socks5dns/log"
+	"github.com/fudanchii/socks5dns/log"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -54,7 +53,7 @@ func (cp *ClientPool) StartClientPool() {
 			}
 		} else {
 			cp.clientChannel <- client
-			l.Info("connected to " + cp.config.RemoteAddr())
+			log.Info("connected to " + cp.config.RemoteAddr())
 		}
 	}
 }
@@ -74,7 +73,7 @@ func (cp *ClientPool) safeHostKeyCallback() ssh.HostKeyCallback {
 	)
 
 	if cp.config.DoNotVerifyHost() {
-		l.Err("Will skip remote host verification, this might harmful!")
+		log.Err("Will skip remote host verification, this might harmful!")
 
 		/* #nosec G106 */
 		return ssh.InsecureIgnoreHostKey()
@@ -104,8 +103,8 @@ func (cp *ClientPool) safeHostKeyCallback() ssh.HostKeyCallback {
 						)
 						goto bailOut
 					}
-					l.Info("Found valid host key for " + cp.config.RemoteAddr())
-					l.Info("fingerprint: " + ssh.FingerprintSHA256(pk))
+					log.Info("Found valid host key for " + cp.config.RemoteAddr())
+					log.Info("fingerprint: " + ssh.FingerprintSHA256(pk))
 					return ssh.FixedHostKey(pk)
 				}
 			}
