@@ -49,7 +49,7 @@ func (w *proxyWorker) handleRequest(req *proxyRequest, proxy *Proxy) {
 		return
 	}
 
-	proxy.cache.Set(rspMessage)
+	proxy.setCache(rspMessage)
 
 	req.rspChannel <- rspMessage
 }
@@ -101,7 +101,7 @@ func (proxy *Proxy) handler(w dns.ResponseWriter, r *dns.Msg) {
 	var (
 		msg      *dns.Msg
 		err      error
-		cacheHit bool
+		cacheHit bool = false
 	)
 
 	rsp := new(dns.Msg)
@@ -110,7 +110,7 @@ func (proxy *Proxy) handler(w dns.ResponseWriter, r *dns.Msg) {
 	start := time.Now()
 
 	// cacheHit will always false if UseCache is false
-	msg, cacheHit = proxy.cache.Get(r)
+	msg, cacheHit = proxy.getCache(r)
 	if !cacheHit {
 		msg, err = proxy.singleFlightRequestHandler(r)
 	}
@@ -199,6 +199,20 @@ func (proxy *Proxy) selectWorker(r *proxyRequest, timeout <-chan time.Time) {
 	if chosen, _, _ := reflect.Select(cases); chosen == 0 {
 		r.errChannel <- fmt.Errorf("timeout")
 	}
+}
+
+func (proxy *Proxy) getCache(req *dns.Msg) (*dns.Msg, bool) {
+	if proxy.config.UseCache() {
+		return proxy.cache.Get(req)
+	}
+	return nil, false
+}
+
+func (proxy *Proxy) setCache(req *dns.Msg) {
+	if !proxy.config.UseCache() || proxy.cache == nil {
+		return
+	}
+	proxy.cache.Set(req)
 }
 
 func logResponse(m *dns.Msg, cacheHit bool, d time.Duration) {

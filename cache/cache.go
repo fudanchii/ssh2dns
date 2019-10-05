@@ -1,37 +1,45 @@
 package cache
 
 import (
-	"time"
-
 	"github.com/fudanchii/socks5dns/config"
+	"github.com/fudanchii/socks5dns/log"
 
-	"github.com/allegro/bigcache"
+	"github.com/dgraph-io/ristretto"
 	"github.com/miekg/dns"
 )
 
 type Cache struct {
-	bc     *bigcache.BigCache
+	rc     *ristretto.Cache
 	config *config.AppConfig
 }
 
 func New(cfg *config.AppConfig) *Cache {
-	cache, _ := bigcache.NewBigCache(bigcache.DefaultConfig(10 * time.Minute))
+	cache, err := ristretto.NewCache(&ristretto.Config{
+		NumCounters: 1e7,
+		MaxCost:     1 << 30,
+		BufferItems: 64,
+	})
+
+	if err != nil {
+		if cfg.UseCache() {
+			log.Fatal(err.Error())
+		}
+		log.Err(err.Error())
+		return nil
+	}
+
 	return &Cache{cache, cfg}
 }
 
 func (cache *Cache) Get(msg *dns.Msg) (*dns.Msg, bool) {
-	if !cache.config.UseCache() {
-		return nil, false
-	}
-
 	msg.Answer = []dns.RR{}
 	for _, question := range msg.Question {
-		cacheval, err := cache.bc.Get(keying(question.Name, question.Qtype))
-		if err != nil {
-			return nil, false
+		cacheval, found := cache.rc.Get(keying(question.Name, question.Qtype))
+		if !found {
+			return nil, found
 		}
 
-		rr, err := dns.NewRR(string(cacheval))
+		rr, err := dns.NewRR(string(cacheval.([]byte)))
 		if err != nil {
 			return nil, false
 		}
@@ -43,13 +51,9 @@ func (cache *Cache) Get(msg *dns.Msg) (*dns.Msg, bool) {
 }
 
 func (cache *Cache) Set(msg *dns.Msg) {
-	if !cache.config.UseCache() {
-		return
-	}
-
 	for _, answer := range msg.Answer {
 		header := answer.Header()
-		cache.bc.Set(keying(header.Name, header.Rrtype), []byte(answer.String()))
+		cache.rc.Set(keying(header.Name, header.Rrtype), []byte(answer.String()), 1)
 	}
 }
 
