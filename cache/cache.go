@@ -1,6 +1,8 @@
 package cache
 
 import (
+	"fmt"
+
 	"github.com/fudanchii/socks5dns/config"
 	"github.com/fudanchii/socks5dns/log"
 
@@ -11,6 +13,12 @@ import (
 type Cache struct {
 	rc     *ristretto.Cache
 	config *config.AppConfig
+}
+
+type dnsCacheContent struct {
+	Answer []dns.RR
+	Ns     []dns.RR
+	Extra  []dns.RR
 }
 
 func New(cfg *config.AppConfig) *Cache {
@@ -32,31 +40,31 @@ func New(cfg *config.AppConfig) *Cache {
 }
 
 func (cache *Cache) Get(msg *dns.Msg) (*dns.Msg, bool) {
-	msg.Answer = []dns.RR{}
-	for _, question := range msg.Question {
-		cacheval, found := cache.rc.Get(keying(question.Name, question.Qtype))
-		if !found {
-			return nil, found
-		}
-
-		rr, err := dns.NewRR(string(cacheval.([]byte)))
-		if err != nil {
-			return nil, false
-		}
-
-		msg.Answer = append(msg.Answer, rr)
+	cacheval, found := cache.rc.Get(keying(msg))
+	if !found {
+		return nil, found
 	}
+
+	actualval := cacheval.(dnsCacheContent)
+	msg.Answer = actualval.Answer
+	msg.Ns = actualval.Ns
+	msg.Extra = actualval.Extra
 
 	return msg, true
 }
 
-func (cache *Cache) Set(msg *dns.Msg) {
-	for _, answer := range msg.Answer {
-		header := answer.Header()
-		cache.rc.Set(keying(header.Name, header.Rrtype), []byte(answer.String()), 1)
-	}
+func (cache *Cache) Set(req *dns.Msg, msg *dns.Msg) {
+	cache.rc.Set(keying(req), dnsCacheContent{
+		Answer: msg.Answer,
+		Ns:     msg.Ns,
+		Extra:  msg.Extra,
+	}, 0)
 }
 
-func keying(name string, ty uint16) string {
-	return dns.TypeToString[ty] + ":" + name
+func keying(req *dns.Msg) string {
+	key := ""
+	for _, q := range req.Question {
+		key = key + fmt.Sprintf("%s:%d,", q.Name, q.Qtype)
+	}
+	return key
 }
