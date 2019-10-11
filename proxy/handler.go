@@ -49,7 +49,7 @@ func (w *proxyWorker) handleRequest(req *proxyRequest, proxy *Proxy) {
 		return
 	}
 
-	proxy.setCache(rspMessage)
+	proxy.setCache(req.message, rspMessage)
 
 	req.rspChannel <- rspMessage
 }
@@ -132,7 +132,7 @@ func (proxy *Proxy) handler(w dns.ResponseWriter, r *dns.Msg) {
 		rsp.Extra = msg.Extra
 	}
 
-	logResponse(rsp, cacheHit, end.Sub(start))
+	logRequest(rsp, cacheHit, end.Sub(start))
 
 	if err = w.WriteMsg(rsp); err != nil {
 		log.Err(err.Error())
@@ -208,22 +208,21 @@ func (proxy *Proxy) getCache(req *dns.Msg) (*dns.Msg, bool) {
 	return nil, false
 }
 
-func (proxy *Proxy) setCache(req *dns.Msg) {
+func (proxy *Proxy) setCache(req *dns.Msg, rsp *dns.Msg) {
 	if !proxy.config.UseCache() || proxy.cache == nil {
 		return
 	}
-	proxy.cache.Set(req)
+	proxy.cache.Set(req, rsp)
 }
 
-func logResponse(m *dns.Msg, cacheHit bool, d time.Duration) {
-	for _, a := range m.Answer {
-		h := a.Header()
+func logRequest(m *dns.Msg, cacheHit bool, d time.Duration) {
+	for _, a := range m.Question {
 		log.Info(fmt.Sprintf(
 			"[%s] (%5d) %5s %s %s",
 			hitOrMiss(cacheHit),
 			m.MsgHdr.Id,
-			dns.TypeToString[h.Rrtype],
-			h.Name,
+			dns.TypeToString[a.Qtype],
+			a.Name,
 			d.String(),
 		))
 	}
