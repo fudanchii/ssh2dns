@@ -101,7 +101,7 @@ func (proxy *Proxy) handler(w dns.ResponseWriter, r *dns.Msg) {
 	var (
 		msg      *dns.Msg
 		err      error
-		cacheHit bool = false
+		cacheHit bool
 	)
 
 	rsp := new(dns.Msg)
@@ -169,7 +169,6 @@ func (proxy *Proxy) singleFlightRequestHandler(r *dns.Msg) (*dns.Msg, error) {
 		case err := <-errChannel:
 			return nil, err
 		}
-
 	})
 
 	// this ensure type assertion below is always success
