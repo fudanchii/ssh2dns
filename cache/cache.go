@@ -64,7 +64,7 @@ func (cache *Cache) Set(req *dns.Msg, msg *dns.Msg) {
 func keying(req *dns.Msg) string {
 	key := ""
 	for _, q := range req.Question {
-		key = key + fmt.Sprintf("%s:%d,", q.Name, q.Qtype)
+		key += fmt.Sprintf("%s:%d,", q.Name, q.Qtype)
 	}
 	return key
 }
