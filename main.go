@@ -1,10 +1,10 @@
-// Socks5dns relays DNS request via ssh tunnel proxy
+// ssh2dns relays DNS request via ssh tunnel proxy
 // it works by connecting to specified remote ssh server
 // and bind to local address. It will then forward any
 // dns request via ssh connection to the DNS server, randomly-
 // chosen from the specified list.
 //
-// Socks5dns also provides simple caching for the nameserver
+// ssh2dns also provides simple caching for the nameserver
 // query result.
 //
 // Usage examples:
@@ -29,7 +29,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/fudanchii/socks5dns/log"
+	"github.com/fudanchii/ssh2dns/log"
 )
 
 func main() {

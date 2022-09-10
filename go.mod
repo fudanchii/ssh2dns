@@ -1,4 +1,4 @@
-module github.com/fudanchii/socks5dns
+module github.com/fudanchii/ssh2dns
 
 go 1.12
 

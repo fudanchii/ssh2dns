@@ -6,14 +6,14 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/fudanchii/socks5dns/cache"
-	"github.com/fudanchii/socks5dns/log"
+	"github.com/fudanchii/ssh2dns/cache"
+	"github.com/fudanchii/ssh2dns/log"
 	"github.com/miekg/dns"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/sync/singleflight"
 
-	"github.com/fudanchii/socks5dns/config"
-	sh "github.com/fudanchii/socks5dns/ssh"
+	"github.com/fudanchii/ssh2dns/config"
+	sh "github.com/fudanchii/ssh2dns/ssh"
 )
 
 type proxyRequest struct {

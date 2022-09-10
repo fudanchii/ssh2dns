@@ -7,8 +7,8 @@ import (
 	"net"
 	"strings"
 
-	"github.com/fudanchii/socks5dns/config"
-	"github.com/fudanchii/socks5dns/log"
+	"github.com/fudanchii/ssh2dns/config"
+	"github.com/fudanchii/ssh2dns/log"
 	"golang.org/x/crypto/ssh"
 )
 
