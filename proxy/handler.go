@@ -4,16 +4,17 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fudanchii/ssh2dns/cache"
 	"github.com/fudanchii/ssh2dns/log"
 	"github.com/miekg/dns"
-	"golang.org/x/crypto/ssh"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/fudanchii/ssh2dns/config"
-	sh "github.com/fudanchii/ssh2dns/ssh"
+	"github.com/fudanchii/ssh2dns/ssh"
 )
 
 type proxyRequest struct {
@@ -26,6 +27,16 @@ type proxyWorker struct {
 	sshClient  *ssh.Client
 	reqChannel chan *proxyRequest
 	config     *config.AppConfig
+}
+
+func (w *proxyWorker) reconnect() {
+	w.sshClient.Drop()
+	rchan := w.reqChannel
+	w.reqChannel = nil // set to nil so it never get selected
+
+	// blocking here until we get new connection
+	w.sshClient = w.sshClient.Reconnect()
+	w.reqChannel = rchan
 }
 
 func (w *proxyWorker) handleRequest(req *proxyRequest, proxy *Proxy) {
@@ -54,22 +65,28 @@ func (w *proxyWorker) handleRequest(req *proxyRequest, proxy *Proxy) {
 	req.rspChannel <- rspMessage
 }
 
+const errThreshold = 10
+
 type Proxy struct {
-	workers     []*proxyWorker
-	waitChannel chan bool
-	flightGroup singleflight.Group
-	config      *config.AppConfig
-	cache       *cache.Cache
-	clientPool  *sh.ClientPool
+	workers      []*proxyWorker
+	waitChannel  chan bool
+	flightGroup  singleflight.Group
+	config       *config.AppConfig
+	cache        *cache.Cache
+	clientPool   *ssh.ClientPool
+	errCounter   atomic.Uint32
+	reconnecting atomic.Bool
+	reconnectCh  chan struct{}
 }
 
-func New(cfg *config.AppConfig, clientPool *sh.ClientPool, cachee *cache.Cache) *Proxy {
+func New(cfg *config.AppConfig, clientPool *ssh.ClientPool, cachee *cache.Cache) *Proxy {
 	var proxy = Proxy{
 		workers:     make([]*proxyWorker, cfg.WorkerNum()),
 		waitChannel: make(chan bool, 1),
 		config:      cfg,
 		cache:       cachee,
 		clientPool:  clientPool,
+		reconnectCh: make(chan struct{}),
 	}
 
 	go func(proxy *Proxy) {
@@ -150,7 +167,44 @@ func (proxy *Proxy) ListenAndServe() error {
 	return srv.ListenAndServe()
 }
 
+func (proxy *Proxy) handleError() {
+	if proxy.errCounter.CompareAndSwap(errThreshold, errThreshold) {
+		log.Info("[handleError] more than threshold, already processed")
+		return
+	}
+
+	if nv := proxy.errCounter.Add(1); nv < errThreshold {
+		log.Info("[handleError] no further process needed")
+		return
+	}
+
+	if proxy.reconnecting.CompareAndSwap(false, true) {
+		log.Info("reconnecting all workers")
+
+		close(proxy.reconnectCh)
+
+		var wg sync.WaitGroup
+		for _, w := range proxy.workers {
+			wg.Add(1)
+			go func(w *proxyWorker) {
+				defer wg.Done()
+				w.reconnect()
+			}(w)
+		}
+		wg.Wait()
+
+		log.Info("all workers reconnected")
+		proxy.reconnecting.Store(false)
+		proxy.reconnectCh = make(chan struct{})
+		proxy.errCounter.Store(0)
+	}
+}
+
 func (proxy *Proxy) singleFlightRequestHandler(r *dns.Msg) (*dns.Msg, error) {
+	if proxy.reconnecting.Load() == true {
+		return nil, fmt.Errorf("cannot handle request now")
+	}
+
 	rsp, err, _ := proxy.flightGroup.Do(strconv.Itoa(int(r.MsgHdr.Id)), func() (interface{}, error) {
 		rspChannel := make(chan *dns.Msg, 1)
 		errChannel := make(chan error, 1)
@@ -167,6 +221,7 @@ func (proxy *Proxy) singleFlightRequestHandler(r *dns.Msg) (*dns.Msg, error) {
 		case msg := <-rspChannel:
 			return msg, nil
 		case err := <-errChannel:
+			go proxy.handleError()
 			return nil, err
 		}
 	})
@@ -180,23 +235,33 @@ func (proxy *Proxy) singleFlightRequestHandler(r *dns.Msg) (*dns.Msg, error) {
 }
 
 func (proxy *Proxy) selectWorker(r *proxyRequest, timeout <-chan time.Time) {
-	cases := make([]reflect.SelectCase, len(proxy.workers)+1)
+	cases := make([]reflect.SelectCase, len(proxy.workers)+2)
 	cases[0] = reflect.SelectCase{
 		Dir:  reflect.SelectRecv,
 		Chan: reflect.ValueOf(timeout),
 		Send: reflect.ValueOf(nil),
 	}
 
+	cases[1] = reflect.SelectCase{
+		Dir:  reflect.SelectRecv,
+		Chan: reflect.ValueOf(proxy.reconnectCh),
+		Send: reflect.ValueOf(nil),
+	}
+
 	for x, worker := range proxy.workers {
-		cases[x+1] = reflect.SelectCase{
+		cases[x+2] = reflect.SelectCase{
 			Dir:  reflect.SelectSend,
 			Chan: reflect.ValueOf(worker.reqChannel),
 			Send: reflect.ValueOf(r),
 		}
 	}
 
-	if chosen, _, _ := reflect.Select(cases); chosen == 0 {
+	chosen, _, _ := reflect.Select(cases)
+	if chosen == 0 {
 		r.errChannel <- fmt.Errorf("timeout")
+	}
+	if chosen == 1 {
+		r.errChannel <- fmt.Errorf("reconnecting, cannot process this request")
 	}
 }
 
