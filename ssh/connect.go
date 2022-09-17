@@ -6,22 +6,43 @@ import (
 	"io/ioutil"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/fudanchii/ssh2dns/config"
 	"github.com/fudanchii/ssh2dns/log"
 	"golang.org/x/crypto/ssh"
 )
 
+type Reconnector interface {
+	Reconnect() *Client
+}
+
+type Client struct {
+	*ssh.Client
+	Reconnector
+}
+
+func (client *Client) Drop() {
+	if client.Client == nil {
+		return
+	}
+
+	err := client.Close()
+	if err != nil {
+		log.Err(err.Error())
+	}
+}
+
 type ClientPool struct {
-	reconnect     chan bool
-	clientChannel chan *ssh.Client
+	reconnect     chan string
+	clientChannel chan *Client
 	config        *config.AppConfig
 }
 
 func NewClientPool(cfg *config.AppConfig) *ClientPool {
 	cp := &ClientPool{
-		reconnect:     make(chan bool, cfg.WorkerNum()+1),
-		clientChannel: make(chan *ssh.Client, 1),
+		reconnect:     make(chan string, cfg.WorkerNum()+1),
+		clientChannel: make(chan *Client, 1),
 		config:        cfg,
 	}
 	go cp.StartClientPool()
@@ -40,26 +61,39 @@ func (cp *ClientPool) StartClientPool() {
 	}
 
 	hostKeyCB := cp.safeHostKeyCallback()
-	for range cp.reconnect {
+	for state := range cp.reconnect {
 		client, err := ssh.Dial("tcp", cp.config.RemoteAddr(), &ssh.ClientConfig{
 			User:            cp.config.RemoteUser(),
 			Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 			HostKeyCallback: hostKeyCB,
 		})
 		if err != nil {
-			log.Fatal(err.Error())
+			if state == "init" {
+				log.Fatal(err.Error())
+			} else {
+				log.Err(err.Error())
+				go func() {
+					time.Sleep(10 * time.Second)
+					cp.reconnect <- "reconnect"
+				}()
+			}
 			if client != nil {
 				client.Close()
 			}
 		} else {
-			cp.clientChannel <- client
+			cp.clientChannel <- &Client{client, cp}
 			log.Info("connected to " + cp.config.RemoteAddr())
 		}
 	}
 }
 
-func (cp *ClientPool) Connect() *ssh.Client {
-	cp.reconnect <- true
+func (cp *ClientPool) Connect() *Client {
+	cp.reconnect <- "init"
+	return <-cp.clientChannel
+}
+
+func (cp *ClientPool) Reconnect() *Client {
+	cp.reconnect <- "reconnect"
 	return <-cp.clientChannel
 }
 

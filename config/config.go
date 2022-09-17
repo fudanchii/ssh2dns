@@ -58,8 +58,8 @@ func New() *AppConfig {
 	)
 	flag.IntVar(
 		&config.connTimeout,
-		"t", 30,
-		"Set timeout for net dial, default to 30 seconds",
+		"t", 10,
+		"Set timeout for net dial, default to 10 seconds",
 	)
 	flag.IntVar(
 		&config.workerNum,
