@@ -2,6 +2,7 @@ package cache
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/fudanchii/ssh2dns/config"
 	"github.com/fudanchii/ssh2dns/log"
@@ -16,6 +17,8 @@ type Cache struct {
 }
 
 type dnsCacheContent struct {
+	Ts     time.Time
+	Ttl    time.Duration
 	Answer []dns.RR
 	Ns     []dns.RR
 	Extra  []dns.RR
@@ -46,6 +49,12 @@ func (cache *Cache) Get(msg *dns.Msg) (*dns.Msg, bool) {
 	}
 
 	actualval := cacheval.(dnsCacheContent)
+
+	// evict cache when expired
+	if time.Now().After(actualval.Ts.Add(actualval.Ttl * time.Second)) {
+		go cache.rc.Del(keying(msg))
+	}
+
 	msg.Answer = actualval.Answer
 	msg.Ns = actualval.Ns
 	msg.Extra = actualval.Extra
@@ -54,7 +63,16 @@ func (cache *Cache) Get(msg *dns.Msg) (*dns.Msg, bool) {
 }
 
 func (cache *Cache) Set(req *dns.Msg, msg *dns.Msg) {
+	if len(msg.Answer) == 0 {
+		// no cache for empty answers
+		return
+	}
+
+	firstAnswer := msg.Answer[0]
+
 	cache.rc.Set(keying(req), dnsCacheContent{
+		Ts:     time.Now(),
+		Ttl:    time.Duration(firstAnswer.Header().Ttl),
 		Answer: msg.Answer,
 		Ns:     msg.Ns,
 		Extra:  msg.Extra,
