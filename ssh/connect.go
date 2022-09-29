@@ -60,20 +60,21 @@ func (cp *ClientPool) StartClientPool() {
 		log.Fatal(err.Error())
 	}
 
-	hostKeyCB := cp.safeHostKeyCallback()
 	for state := range cp.reconnect {
 		client, err := ssh.Dial("tcp", cp.config.RemoteAddr(), &ssh.ClientConfig{
 			User:            cp.config.RemoteUser(),
 			Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-			HostKeyCallback: hostKeyCB,
+			HostKeyCallback: cp.safeHostKeyCallback(),
 		})
 		if err != nil {
 			if state == "init" {
 				log.Fatal(err.Error())
 			} else {
 				log.Err(err.Error())
+				log.Info("ssh: will reconnect in the next 5s")
 				go func() {
-					time.Sleep(10 * time.Second)
+					time.Sleep(5 * time.Second)
+					log.Info("ssh: reconnecting...")
 					cp.reconnect <- "reconnect"
 				}()
 			}
@@ -115,8 +116,13 @@ func (cp *ClientPool) safeHostKeyCallback() ssh.HostKeyCallback {
 
 	// HostKey is in known_host format
 	if hk, err = ioutil.ReadFile(cp.config.HostKey()); err == nil {
+		var pkps []ssh.HostKeyCallback
 		for {
 			marker, hosts, pk, _, hk, err = ssh.ParseKnownHosts(hk)
+			if err == io.EOF && len(pkps) > 0 {
+				return MultiHostKeys(pkps)
+			}
+
 			if err == io.EOF {
 				err = fmt.Errorf("No valid key found for host: " + cp.config.RemoteAddr())
 				goto bailOut
@@ -129,7 +135,8 @@ func (cp *ClientPool) safeHostKeyCallback() ssh.HostKeyCallback {
 			for _, host := range hosts {
 				host = strings.ReplaceAll(host, "[", "")
 				host = strings.ReplaceAll(host, "]", "")
-				if host == cp.config.RemoteAddr() {
+				if host == cp.config.RemoteAddr() ||
+					(host+":22") == cp.config.RemoteAddr() {
 					if marker == "revoked" {
 						err = fmt.Errorf(
 							"found valid key for %s, but the key has been revoked",
@@ -139,13 +146,25 @@ func (cp *ClientPool) safeHostKeyCallback() ssh.HostKeyCallback {
 					}
 					log.Info("Found valid host key for " + cp.config.RemoteAddr())
 					log.Info("fingerprint: " + ssh.FingerprintSHA256(pk))
-					return ssh.FixedHostKey(pk)
+					pkps = append(pkps, ssh.FixedHostKey(pk))
 				}
 			}
 		}
 	}
 bailOut:
 	return func(host string, remote net.Addr, p ssh.PublicKey) error {
+		return err
+	}
+}
+
+func MultiHostKeys(pkps []ssh.HostKeyCallback) ssh.HostKeyCallback {
+	return func(host string, remote net.Addr, p ssh.PublicKey) error {
+		var err error
+		for _, pkp := range pkps {
+			if err = pkp(host, remote, p); err == nil {
+				return nil
+			}
+		}
 		return err
 	}
 }

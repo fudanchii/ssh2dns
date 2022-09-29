@@ -201,7 +201,7 @@ func (proxy *Proxy) handleError() {
 }
 
 func (proxy *Proxy) singleFlightRequestHandler(r *dns.Msg) (*dns.Msg, error) {
-	if proxy.reconnecting.Load() == true {
+	if proxy.reconnecting.Load() {
 		return nil, fmt.Errorf("cannot handle request now")
 	}
 
