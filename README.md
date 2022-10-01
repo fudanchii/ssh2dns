@@ -12,6 +12,6 @@ Usage of ./ssh2dns:
 | `-i string` | Specify identity file to use when connecting to ssh server (default "$HOME/.ssh/id_rsa") |
 | `-s string` | Connect to this ssh server, default to 127.0.0.1:22 (default "127.0.0.1:22") |
 | `-t int` | Set timeout for net dial, default to 30 seconds (default 30) |
-| `-u string` | Specify user to connect with ssh server (default "adie") |
+| `-u string` | Specify user to connect with ssh server (default "$USER") |
 | `-w int` | Set the number of worker to run as ssh client, default to number of cpu |
 | `-x` | Skip host key verification, makes you vulnerable to man-in-the-middle attack! |
