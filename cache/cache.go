@@ -50,9 +50,9 @@ func (cache *Cache) Get(msg *dns.Msg) (*dns.Msg, bool) {
 
 	actualval := cacheval.(dnsCacheContent)
 
-	// evict cache when expired
-	if time.Now().After(actualval.Ts.Add(actualval.Ttl * time.Second)) {
-		go cache.rc.Del(keying(msg))
+	// evict cache when expired, cache 3 times longer than TTL
+	if time.Now().After(actualval.Ts.Add(actualval.Ttl * 3 * time.Second)) {
+		cache.rc.Del(keying(msg))
 	}
 
 	msg.Answer = actualval.Answer
@@ -63,16 +63,16 @@ func (cache *Cache) Get(msg *dns.Msg) (*dns.Msg, bool) {
 }
 
 func (cache *Cache) Set(req *dns.Msg, msg *dns.Msg) {
-	if len(msg.Answer) == 0 {
-		// no cache for empty answers
+	if len(msg.Answer) == 0 && len(msg.Ns) == 0 && len(msg.Extra) == 0 {
+		// no cache for empty answers, authority, and additional sections
 		return
 	}
 
-	firstAnswer := msg.Answer[0]
+	firstSection := getFirstAvailableSection(msg)
 
 	cache.rc.Set(keying(req), dnsCacheContent{
 		Ts:     time.Now(),
-		Ttl:    time.Duration(firstAnswer.Header().Ttl),
+		Ttl:    time.Duration(firstSection.Header().Ttl),
 		Answer: msg.Answer,
 		Ns:     msg.Ns,
 		Extra:  msg.Extra,
@@ -85,4 +85,16 @@ func keying(req *dns.Msg) string {
 		key += fmt.Sprintf("%s:%d,", q.Name, q.Qtype)
 	}
 	return key
+}
+
+func getFirstAvailableSection(msg *dns.Msg) dns.RR {
+	if len(msg.Answer) > 0 {
+		return msg.Answer[0]
+	}
+
+	if len(msg.Ns) > 0 {
+		return msg.Ns[0]
+	}
+
+	return msg.Extra[0]
 }
