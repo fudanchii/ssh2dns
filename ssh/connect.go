@@ -65,6 +65,13 @@ func (cp *ClientPool) StartClientPool() {
 			User:            cp.config.RemoteUser(),
 			Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 			HostKeyCallback: cp.safeHostKeyCallback(),
+			HostKeyAlgorithms: []string{
+				"ssh-ed25519",
+				"ecdsa-sha2-nistp256",
+				"ecdsa-sha2-nistp384",
+				"ecdsa-sha2-nistp521",
+				"ssh-rsa",
+			},
 		})
 		if err != nil {
 			if state == "init" {
@@ -144,8 +151,7 @@ func (cp *ClientPool) safeHostKeyCallback() ssh.HostKeyCallback {
 						)
 						goto bailOut
 					}
-					log.Info("Found valid host key for " + cp.config.RemoteAddr())
-					log.Info("fingerprint: " + ssh.FingerprintSHA256(pk))
+					log.Info("fingerprint: " + pk.Type() + " " + ssh.FingerprintSHA256(pk))
 					pkps = append(pkps, ssh.FixedHostKey(pk))
 				}
 			}
