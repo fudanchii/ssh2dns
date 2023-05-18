@@ -43,13 +43,17 @@ func setupAppContainer() *dig.Container {
 	)
 }
 
-func appStart(dep Dependencies) {
-	dep.DNSProxy.Wait()
+func appStart(signal chan os.Signal) func(Dependencies) {
+	return func(dep Dependencies) {
+		go func(dep *Dependencies) {
+			log.Info("Listening...")
+			if err := dep.DNSProxy.ListenAndServe(); err != nil {
+				log.Err(err.Error())
+			}
+		}(&dep)
 
-	go func(dep *Dependencies) {
-		log.Info("Listening...")
-		if err := dep.DNSProxy.ListenAndServe(); err != nil {
-			log.Err(err.Error())
-		}
-	}(&dep)
+		defer dep.DNSProxy.Shutdown()
+
+		<-signal
+	}
 }

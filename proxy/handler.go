@@ -1,16 +1,15 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
-	"reflect"
 	"strconv"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/fudanchii/ssh2dns/cache"
 	"github.com/fudanchii/ssh2dns/log"
 	"github.com/miekg/dns"
+	"github.com/sourcegraph/conc/pool"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/fudanchii/ssh2dns/config"
@@ -19,28 +18,36 @@ import (
 
 type proxyRequest struct {
 	message    *dns.Msg
+	sshClient  *ssh.Client
 	rspChannel chan *dns.Msg
 	errChannel chan error
 }
 
-type proxyWorker struct {
-	sshClient  *ssh.Client
-	reqChannel chan *proxyRequest
-	config     *config.AppConfig
+type Proxy struct {
+	srv         *dns.Server
+	workers     *pool.Pool
+	flightGroup singleflight.Group
+	config      *config.AppConfig
+	cache       *cache.Cache
+	clientPool  *ssh.ClientPool
 }
 
-func (w *proxyWorker) reconnect() {
-	w.sshClient.Drop()
-	rchan := w.reqChannel
-	w.reqChannel = nil // set to nil so it never get selected
+func New(cfg *config.AppConfig, clientPool *ssh.ClientPool, cachee *cache.Cache) *Proxy {
+	var proxy = Proxy{
+		config:     cfg,
+		cache:      cachee,
+		clientPool: clientPool,
+		workers:    pool.New().WithMaxGoroutines(cfg.WorkerNum() * 2),
+		srv:        &dns.Server{Addr: cfg.BindAddr(), Net: "udp"},
+	}
 
-	// blocking here until we get new connection
-	w.sshClient = w.sshClient.Reconnect()
-	w.reqChannel = rchan
+	dns.HandleFunc(".", proxy.handler)
+
+	return &proxy
 }
 
-func (w *proxyWorker) handleRequest(req *proxyRequest, proxy *Proxy) {
-	conn, err := w.sshClient.Dial("tcp", w.config.TargetServer())
+func (proxy *Proxy) handleRequest(req *proxyRequest) {
+	conn, err := req.sshClient.Dial("tcp", proxy.config.TargetServer())
 	if err != nil {
 		req.errChannel <- fmt.Errorf("error dialing DNS: %s", err.Error())
 		return
@@ -63,55 +70,6 @@ func (w *proxyWorker) handleRequest(req *proxyRequest, proxy *Proxy) {
 	proxy.setCache(req.message, rspMessage)
 
 	req.rspChannel <- rspMessage
-}
-
-const errThreshold = 10
-
-type Proxy struct {
-	workers      []*proxyWorker
-	waitChannel  chan bool
-	flightGroup  singleflight.Group
-	config       *config.AppConfig
-	cache        *cache.Cache
-	clientPool   *ssh.ClientPool
-	errCounter   atomic.Uint32
-	reconnecting atomic.Bool
-	reconnectCh  chan struct{}
-}
-
-func New(cfg *config.AppConfig, clientPool *ssh.ClientPool, cachee *cache.Cache) *Proxy {
-	var proxy = Proxy{
-		workers:     make([]*proxyWorker, cfg.WorkerNum()),
-		waitChannel: make(chan bool, 1),
-		config:      cfg,
-		cache:       cachee,
-		clientPool:  clientPool,
-		reconnectCh: make(chan struct{}),
-	}
-
-	go func(proxy *Proxy) {
-		log.Info(fmt.Sprintf("running %d worker connections", cfg.WorkerNum()))
-
-		for i := range proxy.workers {
-			proxy.workers[i] = &proxyWorker{
-				sshClient:  proxy.clientPool.Connect(),
-				reqChannel: make(chan *proxyRequest),
-				config:     proxy.config,
-			}
-		}
-
-		for _, worker := range proxy.workers {
-			go func(worker *proxyWorker) {
-				for request := range worker.reqChannel {
-					worker.handleRequest(request, proxy)
-				}
-			}(worker)
-		}
-
-		proxy.waitChannel <- true
-	}(&proxy)
-
-	return &proxy
 }
 
 func (proxy *Proxy) handler(w dns.ResponseWriter, r *dns.Msg) {
@@ -157,71 +115,45 @@ func (proxy *Proxy) handler(w dns.ResponseWriter, r *dns.Msg) {
 	}
 }
 
-func (proxy *Proxy) Wait() {
-	<-proxy.waitChannel
-}
-
 func (proxy *Proxy) ListenAndServe() error {
-	dns.HandleFunc(".", proxy.handler)
-	srv := &dns.Server{Addr: proxy.config.BindAddr(), Net: "udp"}
-	return srv.ListenAndServe()
+	return proxy.srv.ListenAndServe()
 }
 
-func (proxy *Proxy) handleError() {
-	if proxy.errCounter.CompareAndSwap(errThreshold, errThreshold) {
-		log.Info("[handleError] more than threshold, already processed")
-		return
+func (proxy *Proxy) Shutdown() {
+	log.Info("stop listening...")
+	if err := proxy.srv.Shutdown(); err != nil {
+		log.Err(err.Error())
 	}
-
-	if nv := proxy.errCounter.Add(1); nv < errThreshold {
-		log.Info("[handleError] no further process needed")
-		return
-	}
-
-	if proxy.reconnecting.CompareAndSwap(false, true) {
-		log.Info("reconnecting all workers")
-
-		close(proxy.reconnectCh)
-
-		var wg sync.WaitGroup
-		for _, w := range proxy.workers {
-			wg.Add(1)
-			go func(w *proxyWorker) {
-				defer wg.Done()
-				w.reconnect()
-			}(w)
-		}
-		wg.Wait()
-
-		log.Info("all workers reconnected")
-		proxy.reconnecting.Store(false)
-		proxy.reconnectCh = make(chan struct{})
-		proxy.errCounter.Store(0)
-	}
+	log.Info("waiting workers to finish...")
+	proxy.workers.Wait()
+	log.Info("closing remote connections...")
+	proxy.clientPool.Close()
 }
 
 func (proxy *Proxy) singleFlightRequestHandler(r *dns.Msg) (*dns.Msg, error) {
-	if proxy.reconnecting.Load() {
-		return nil, fmt.Errorf("cannot handle request now")
-	}
-
 	rsp, err, _ := proxy.flightGroup.Do(strconv.Itoa(int(r.MsgHdr.Id)), func() (interface{}, error) {
 		rspChannel := make(chan *dns.Msg, 1)
 		errChannel := make(chan error, 1)
-		pReq := proxyRequest{
+
+		sshClient, err := proxy.clientPool.Acquire(context.TODO())
+		if err != nil {
+			return nil, err
+		}
+		defer sshClient.Release()
+
+		pReq := &proxyRequest{
 			message:    r,
+			sshClient:  sshClient.Value(),
 			rspChannel: rspChannel,
 			errChannel: errChannel,
 		}
-		timeout := time.After(time.Duration(proxy.config.ConnTimeout()) * time.Second)
 
-		go proxy.selectWorker(&pReq, timeout)
+		go proxy.workers.Go(func() { proxy.handleRequest(pReq) })
 
 		select {
 		case msg := <-rspChannel:
 			return msg, nil
 		case err := <-errChannel:
-			go proxy.handleError()
 			return nil, err
 		}
 	})
@@ -232,37 +164,6 @@ func (proxy *Proxy) singleFlightRequestHandler(r *dns.Msg) (*dns.Msg, error) {
 	}
 
 	return rsp.(*dns.Msg), nil
-}
-
-func (proxy *Proxy) selectWorker(r *proxyRequest, timeout <-chan time.Time) {
-	cases := make([]reflect.SelectCase, len(proxy.workers)+2)
-	cases[0] = reflect.SelectCase{
-		Dir:  reflect.SelectRecv,
-		Chan: reflect.ValueOf(timeout),
-		Send: reflect.ValueOf(nil),
-	}
-
-	cases[1] = reflect.SelectCase{
-		Dir:  reflect.SelectRecv,
-		Chan: reflect.ValueOf(proxy.reconnectCh),
-		Send: reflect.ValueOf(nil),
-	}
-
-	for x, worker := range proxy.workers {
-		cases[x+2] = reflect.SelectCase{
-			Dir:  reflect.SelectSend,
-			Chan: reflect.ValueOf(worker.reqChannel),
-			Send: reflect.ValueOf(r),
-		}
-	}
-
-	chosen, _, _ := reflect.Select(cases)
-	if chosen == 0 {
-		r.errChannel <- fmt.Errorf("timeout")
-	}
-	if chosen == 1 {
-		r.errChannel <- fmt.Errorf("reconnecting, cannot process this request")
-	}
 }
 
 func (proxy *Proxy) getCache(req *dns.Msg) (*dns.Msg, bool) {

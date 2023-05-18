@@ -1,111 +1,104 @@
 package ssh
 
 import (
+	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
+	"os"
 	"strings"
-	"time"
 
 	"github.com/fudanchii/ssh2dns/config"
 	"github.com/fudanchii/ssh2dns/log"
+	"github.com/jackc/puddle/v2"
 	"golang.org/x/crypto/ssh"
 )
 
-type Reconnector interface {
-	Reconnect() *Client
-}
-
 type Client struct {
 	*ssh.Client
-	Reconnector
 }
 
-func (client *Client) Drop() {
-	if client.Client == nil {
-		return
-	}
-
-	err := client.Close()
-	if err != nil {
-		log.Err(err.Error())
-	}
-}
-
-type ClientPool struct {
-	reconnect     chan string
-	clientChannel chan *Client
-	config        *config.AppConfig
-}
-
-func NewClientPool(cfg *config.AppConfig) *ClientPool {
-	cp := &ClientPool{
-		reconnect:     make(chan string, cfg.WorkerNum()+1),
-		clientChannel: make(chan *Client, 1),
-		config:        cfg,
-	}
-	go cp.StartClientPool()
-	return cp
-}
-
-func (cp *ClientPool) StartClientPool() {
-	pk, err := ioutil.ReadFile(cp.config.PrivKeyFile())
-	if err != nil {
-		log.Fatal(err.Error())
-	}
-
-	signer, err := ssh.ParsePrivateKey(pk)
-	if err != nil {
-		log.Fatal(err.Error())
-	}
-
-	for state := range cp.reconnect {
-		client, err := ssh.Dial("tcp", cp.config.RemoteAddr(), &ssh.ClientConfig{
-			User:            cp.config.RemoteUser(),
+func createNewClient(cfg *config.AppConfig, signer ssh.Signer) puddle.Constructor[*Client] {
+	return func(_ context.Context) (*Client, error) {
+		client, err := ssh.Dial("tcp", cfg.RemoteAddr(), &ssh.ClientConfig{
+			User:            cfg.RemoteUser(),
 			Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-			HostKeyCallback: cp.safeHostKeyCallback(),
+			HostKeyCallback: safeHostKeyCallback(cfg),
 			HostKeyAlgorithms: []string{
 				"ssh-ed25519",
-				"ecdsa-sha2-nistp256",
-				"ecdsa-sha2-nistp384",
 				"ecdsa-sha2-nistp521",
+				"ecdsa-sha2-nistp384",
+				"ecdsa-sha2-nistp256",
 				"ssh-rsa",
 			},
 		})
 		if err != nil {
-			if state == "init" {
-				log.Fatal(err.Error())
-			} else {
-				log.Err(err.Error())
-				log.Info("ssh: will reconnect in the next 5s")
-				go func() {
-					time.Sleep(5 * time.Second)
-					log.Info("ssh: reconnecting...")
-					cp.reconnect <- "reconnect"
-				}()
-			}
-			if client != nil {
-				client.Close()
-			}
-		} else {
-			cp.clientChannel <- &Client{client, cp}
-			log.Info("connected to " + cp.config.RemoteAddr())
+			return nil, err
 		}
+
+		log.Info("connected to " + cfg.RemoteAddr())
+		return &Client{client}, nil
 	}
 }
 
-func (cp *ClientPool) Connect() *Client {
-	cp.reconnect <- "init"
-	return <-cp.clientChannel
+func dropClient(cli *Client) {
+	if cli != nil {
+		cli.Close()
+		cli = nil
+	}
 }
 
-func (cp *ClientPool) Reconnect() *Client {
-	cp.reconnect <- "reconnect"
-	return <-cp.clientChannel
+func newSigner(pkfile string) (ssh.Signer, error) {
+	pk, err := os.ReadFile(pkfile)
+	if err != nil {
+		return nil, err
+	}
+
+	signer, err := ssh.ParsePrivateKey(pk)
+	if err != nil {
+		return nil, err
+	}
+
+	return signer, nil
 }
 
-func (cp *ClientPool) safeHostKeyCallback() ssh.HostKeyCallback {
+type ClientPool struct {
+	*puddle.Pool[*Client]
+	config *config.AppConfig
+	signer ssh.Signer
+}
+
+func NewClientPool(cfg *config.AppConfig) (*ClientPool, error) {
+	signer, err := newSigner(cfg.PrivKeyFile())
+	if err != nil {
+		return nil, err
+	}
+
+	ppool, err := puddle.NewPool(&puddle.Config[*Client]{
+		Constructor: createNewClient(cfg, signer),
+		Destructor:  dropClient,
+		MaxSize:     int32(cfg.WorkerNum() * 2),
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	// try connecting first, bailout if we can't connect at init
+	cli, err := ppool.Acquire(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	cli.Release()
+
+	return &ClientPool{
+		Pool:   ppool,
+		signer: signer,
+		config: cfg,
+	}, nil
+}
+
+func safeHostKeyCallback(cfg *config.AppConfig) ssh.HostKeyCallback {
 	var (
 		err    error
 		hk     []byte
@@ -114,7 +107,7 @@ func (cp *ClientPool) safeHostKeyCallback() ssh.HostKeyCallback {
 		pk     ssh.PublicKey
 	)
 
-	if cp.config.DoNotVerifyHost() {
+	if cfg.DoNotVerifyHost() {
 		log.Err("Will skip remote host verification, this might harmful!")
 
 		/* #nosec G106 */
@@ -122,7 +115,7 @@ func (cp *ClientPool) safeHostKeyCallback() ssh.HostKeyCallback {
 	}
 
 	// HostKey is in known_host format
-	if hk, err = ioutil.ReadFile(cp.config.HostKey()); err == nil {
+	if hk, err = os.ReadFile(cfg.HostKey()); err == nil {
 		var pkps []ssh.HostKeyCallback
 		for {
 			marker, hosts, pk, _, hk, err = ssh.ParseKnownHosts(hk)
@@ -131,7 +124,7 @@ func (cp *ClientPool) safeHostKeyCallback() ssh.HostKeyCallback {
 			}
 
 			if err == io.EOF {
-				err = fmt.Errorf("No valid key found for host: " + cp.config.RemoteAddr())
+				err = fmt.Errorf("No valid key found for host: " + cfg.RemoteAddr())
 				goto bailOut
 			}
 
@@ -142,12 +135,12 @@ func (cp *ClientPool) safeHostKeyCallback() ssh.HostKeyCallback {
 			for _, host := range hosts {
 				host = strings.ReplaceAll(host, "[", "")
 				host = strings.ReplaceAll(host, "]", "")
-				if host == cp.config.RemoteAddr() ||
-					(host+":22") == cp.config.RemoteAddr() {
+				if host == cfg.RemoteAddr() ||
+					(host+":22") == cfg.RemoteAddr() {
 					if marker == "revoked" {
 						err = fmt.Errorf(
 							"found valid key for %s, but the key has been revoked",
-							cp.config.RemoteAddr(),
+							cfg.RemoteAddr(),
 						)
 						goto bailOut
 					}
