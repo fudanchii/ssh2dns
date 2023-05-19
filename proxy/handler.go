@@ -148,7 +148,7 @@ func (proxy *Proxy) singleFlightRequestHandler(r *dns.Msg) (*dns.Msg, error) {
 			errChannel: errChannel,
 		}
 
-		go proxy.workers.Go(func() { proxy.handleRequest(pReq) })
+		proxy.workers.Go(func() { proxy.handleRequest(pReq) })
 
 		select {
 		case msg := <-rspChannel:
