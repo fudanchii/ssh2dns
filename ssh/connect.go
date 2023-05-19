@@ -77,7 +77,7 @@ func NewClientPool(cfg *config.AppConfig) (*ClientPool, error) {
 	ppool, err := puddle.NewPool(&puddle.Config[*Client]{
 		Constructor: createNewClient(cfg, signer),
 		Destructor:  dropClient,
-		MaxSize:     int32(cfg.WorkerNum() * 2),
+		MaxSize:     int32(cfg.WorkerNum()),
 	})
 
 	if err != nil {
