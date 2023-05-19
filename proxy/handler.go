@@ -7,13 +7,13 @@ import (
 	"time"
 
 	"github.com/fudanchii/ssh2dns/cache"
+	"github.com/fudanchii/ssh2dns/config"
 	"github.com/fudanchii/ssh2dns/log"
+	"github.com/fudanchii/ssh2dns/ssh"
+
 	"github.com/miekg/dns"
 	"github.com/sourcegraph/conc/pool"
 	"golang.org/x/sync/singleflight"
-
-	"github.com/fudanchii/ssh2dns/config"
-	"github.com/fudanchii/ssh2dns/ssh"
 )
 
 type proxyRequest struct {
