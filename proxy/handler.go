@@ -50,7 +50,7 @@ func (proxy *Proxy) handleRequest(req *proxyRequest) {
 	rspMessage, err := proxy.rdns.Handle(req.message, req.sshClient)
 
 	if err != nil {
-		req.errChannel <- fmt.Errorf("error reading DNS response: %s", err.Error())
+		req.errChannel <- fmt.Errorf("error handling lookup: %s", err.Error())
 		return
 	}
 
