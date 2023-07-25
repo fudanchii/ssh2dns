@@ -21,6 +21,13 @@ type LookupCoordinator struct {
 	rootMap []*dns.A
 }
 
+var (
+	defaultTimeout time.Duration = time.Duration(5) * time.Second
+	dialTimeout                  = defaultTimeout
+	readTimeout                  = defaultTimeout
+	writeTimeout                 = defaultTimeout
+)
+
 func New(cfg *config.AppConfig) *LookupCoordinator {
 	cc := cache.New(cfg)
 	lc := &LookupCoordinator{
@@ -34,7 +41,7 @@ func New(cfg *config.AppConfig) *LookupCoordinator {
 func (lc *LookupCoordinator) handleRecursive(msg *dns.Msg, sshCli *ssh.Client, srv net.IP) (*dns.Msg, error) {
 	var closeOnce sync.Once
 
-	ctx, cancelCtx := context.WithTimeout(context.TODO(), time.Duration(5)*time.Second)
+	ctx, cancelCtx := context.WithTimeout(context.TODO(), dialTimeout)
 	defer cancelCtx()
 
 	conn, err := sshCli.DialTCPWithContext(ctx, fmt.Sprintf("%s:53", srv.String()))
@@ -46,14 +53,14 @@ func (lc *LookupCoordinator) handleRecursive(msg *dns.Msg, sshCli *ssh.Client, s
 
 	defer closeOnce.Do(closeConn)
 
-	writeCtx, cancelWriteCtx := context.WithTimeout(context.TODO(), time.Duration(5)*time.Second)
+	writeCtx, cancelWriteCtx := context.WithTimeout(context.TODO(), writeTimeout)
 	defer cancelWriteCtx()
 	dnsConn := &Connection{Conn: conn}
 	if err = dnsConn.WriteMsgWithContext(writeCtx, msg); err != nil {
 		return nil, fmt.Errorf("error writing DNS request: %s", err.Error())
 	}
 
-	readCtx, cancelReadCtx := context.WithTimeout(context.TODO(), time.Duration(5)*time.Second)
+	readCtx, cancelReadCtx := context.WithTimeout(context.TODO(), readTimeout)
 	defer cancelReadCtx()
 	rspMsg, err := dnsConn.ReadMsgWithContext(readCtx)
 	if err != nil {
@@ -72,15 +79,15 @@ func (lc *LookupCoordinator) handleRecursive(msg *dns.Msg, sshCli *ssh.Client, s
 	return lc.useNextNS(msg, rspMsg, sshCli)
 }
 
-func (lc *LookupCoordinator) useNextNS(msg *dns.Msg, crsp *dns.Msg, sshCli *ssh.Client) (*dns.Msg, error) {
-	if len(crsp.Ns) > 0 && len(crsp.Extra) > 0 {
-		var (
-			err error
-			rsp *dns.Msg
-		)
-		for _, ns := range crsp.Ns {
+func (lc *LookupCoordinator) useNextNS(msg *dns.Msg, response *dns.Msg, sshCli *ssh.Client) (*dns.Msg, error) {
+	var (
+		err    error
+		result *dns.Msg
+	)
+	if len(response.Ns) > 0 && len(response.Extra) > 0 {
+		for _, ns := range response.Ns {
 			nextNs, _ := ns.(*dns.NS)
-			nextSrv := lo.Filter(crsp.Extra, func(item dns.RR, _ int) bool {
+			nextSrv := lo.Filter(response.Extra, func(item dns.RR, _ int) bool {
 				if a, ok := item.(*dns.A); ok {
 					return a.Header().Name == nextNs.Ns
 				}
@@ -91,19 +98,15 @@ func (lc *LookupCoordinator) useNextNS(msg *dns.Msg, crsp *dns.Msg, sshCli *ssh.
 				continue
 			}
 			newSrv := nextSrv[0].(*dns.A).A
-			rsp, err = lc.handleRecursive(msg, sshCli, newSrv)
-			if err != nil || rsp == nil || len(rsp.Answer) < 1 {
+			result, err = lc.handleRecursive(msg, sshCli, newSrv)
+			if err != nil || result == nil || len(result.Answer) < 1 {
 				continue
 			}
-			return rsp, nil
+			return result, nil
 		}
 		return nil, err
-	} else if len(crsp.Ns) > 0 {
-		var (
-			err error
-			rsp *dns.Msg
-		)
-		for _, ns_ := range crsp.Ns {
+	} else if len(response.Ns) > 0 {
+		for _, ns_ := range response.Ns {
 			ns, ok := ns_.(*dns.NS)
 			if !ok {
 				continue
@@ -116,11 +119,11 @@ func (lc *LookupCoordinator) useNextNS(msg *dns.Msg, crsp *dns.Msg, sshCli *ssh.
 					return nil, err
 				}
 			}
-			rsp, err = lc.handleRecursive(msg, sshCli, nextNs.Answer[0].(*dns.A).A)
-			if err != nil || rsp == nil || len(rsp.Answer) < 1 {
+			result, err = lc.handleRecursive(msg, sshCli, nextNs.Answer[0].(*dns.A).A)
+			if err != nil || result == nil || len(result.Answer) < 1 {
 				continue
 			}
-			return rsp, nil
+			return result, nil
 		}
 		return nil, err
 	}
