@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/fudanchii/ssh2dns/config"
+	"github.com/fudanchii/ssh2dns/errors"
 	"github.com/fudanchii/ssh2dns/log"
 	"github.com/jackc/puddle/v2"
 	"golang.org/x/crypto/ssh"
@@ -16,6 +17,30 @@ import (
 
 type Client struct {
 	*ssh.Client
+}
+
+func (cli *Client) DialTCPWithContext(ctx context.Context, addr string) (net.Conn, error) {
+	var (
+		errResultChannel chan error    = make(chan error, 1)
+		connChannel      chan net.Conn = make(chan net.Conn, 1)
+	)
+
+	go func() {
+		conn, err := cli.Dial("tcp", addr)
+		if err != nil {
+			errResultChannel <- err
+		}
+		connChannel <- conn
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, errors.ConnectionTimeout{}
+	case err := <-errResultChannel:
+		return nil, err
+	case conn := <-connChannel:
+		return conn, nil
+	}
 }
 
 func createNewClient(cfg *config.AppConfig, signer ssh.Signer) puddle.Constructor[*Client] {

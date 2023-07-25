@@ -18,6 +18,7 @@ type AppConfig struct {
 	workerNum       int
 	useCache        bool
 	doNotVerifyHost bool
+	recursiveLookup bool
 }
 
 func New() *AppConfig {
@@ -76,6 +77,11 @@ func New() *AppConfig {
 		"x", false,
 		"Skip host key verification, makes you vulnerable to man-in-the-middle attack!",
 	)
+	flag.BoolVar(
+		&config.recursiveLookup,
+		"r", false,
+		"Do recursive lookup instead of connecting to caching remote DNS, if this is set, -dns config will be ignored",
+	)
 
 	flag.Parse()
 
@@ -120,4 +126,8 @@ func (c *AppConfig) UseCache() bool {
 
 func (c *AppConfig) DoNotVerifyHost() bool {
 	return c.doNotVerifyHost
+}
+
+func (c *AppConfig) RecursiveLookup() bool {
+	return c.recursiveLookup
 }

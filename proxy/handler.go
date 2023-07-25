@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/fudanchii/ssh2dns/cache"
 	"github.com/fudanchii/ssh2dns/config"
 	"github.com/fudanchii/ssh2dns/log"
+	"github.com/fudanchii/ssh2dns/recdns"
 	"github.com/fudanchii/ssh2dns/ssh"
 
 	"github.com/miekg/dns"
@@ -28,17 +28,17 @@ type Proxy struct {
 	workers     *pool.Pool
 	flightGroup singleflight.Group
 	config      *config.AppConfig
-	cache       *cache.Cache
 	clientPool  *ssh.ClientPool
+	rdns        *recdns.LookupCoordinator
 }
 
-func New(cfg *config.AppConfig, clientPool *ssh.ClientPool, cachee *cache.Cache) *Proxy {
+func New(cfg *config.AppConfig, clientPool *ssh.ClientPool) *Proxy {
 	var proxy = Proxy{
 		config:     cfg,
-		cache:      cachee,
 		clientPool: clientPool,
 		workers:    pool.New().WithMaxGoroutines(cfg.WorkerNum() * 2),
 		srv:        &dns.Server{Addr: cfg.BindAddr(), Net: "udp"},
+		rdns:       recdns.New(cfg),
 	}
 
 	dns.HandleFunc(".", proxy.handler)
@@ -47,36 +47,20 @@ func New(cfg *config.AppConfig, clientPool *ssh.ClientPool, cachee *cache.Cache)
 }
 
 func (proxy *Proxy) handleRequest(req *proxyRequest) {
-	conn, err := req.sshClient.Dial("tcp", proxy.config.TargetServer())
-	if err != nil {
-		req.errChannel <- fmt.Errorf("error dialing DNS: %s", err.Error())
-		return
-	}
+	rspMessage, err := proxy.rdns.Handle(req.message, req.sshClient)
 
-	defer conn.Close()
-
-	dnsConn := &Connection{Conn: conn}
-	if err = dnsConn.WriteMsg(req.message); err != nil {
-		req.errChannel <- fmt.Errorf("error writing DNS request: %s", err.Error())
-		return
-	}
-
-	rspMessage, err := dnsConn.ReadMsg()
 	if err != nil {
 		req.errChannel <- fmt.Errorf("error reading DNS response: %s", err.Error())
 		return
 	}
-
-	proxy.setCache(req.message, rspMessage)
 
 	req.rspChannel <- rspMessage
 }
 
 func (proxy *Proxy) handler(w dns.ResponseWriter, r *dns.Msg) {
 	var (
-		msg      *dns.Msg
-		err      error
-		cacheHit bool
+		msg *dns.Msg
+		err error
 	)
 
 	rsp := new(dns.Msg)
@@ -84,9 +68,9 @@ func (proxy *Proxy) handler(w dns.ResponseWriter, r *dns.Msg) {
 
 	start := time.Now()
 
-	// cacheHit will always false if UseCache is false
-	msg, cacheHit = proxy.getCache(r)
-	if !cacheHit {
+	msg, hit := proxy.rdns.CacheLookup(r)
+
+	if !hit {
 		msg, err = proxy.singleFlightRequestHandler(r)
 	}
 
@@ -107,7 +91,7 @@ func (proxy *Proxy) handler(w dns.ResponseWriter, r *dns.Msg) {
 		rsp.Extra = msg.Extra
 	}
 
-	logRequest(rsp, cacheHit, end.Sub(start))
+	logRequest(rsp, hit, end.Sub(start))
 
 	if err = w.WriteMsg(rsp); err != nil {
 		log.Err(err.Error())
@@ -121,7 +105,9 @@ func (proxy *Proxy) ListenAndServe() error {
 
 func (proxy *Proxy) Shutdown() {
 	log.Info("stop listening...")
-	if err := proxy.srv.Shutdown(); err != nil {
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Duration(5)*time.Second)
+	defer cancel()
+	if err := proxy.srv.ShutdownContext(ctx); err != nil {
 		log.Err(err.Error())
 	}
 	log.Info("waiting workers to finish...")
@@ -164,20 +150,6 @@ func (proxy *Proxy) singleFlightRequestHandler(r *dns.Msg) (*dns.Msg, error) {
 	}
 
 	return rsp.(*dns.Msg), nil
-}
-
-func (proxy *Proxy) getCache(req *dns.Msg) (*dns.Msg, bool) {
-	if proxy.config.UseCache() {
-		return proxy.cache.Get(req)
-	}
-	return nil, false
-}
-
-func (proxy *Proxy) setCache(req *dns.Msg, rsp *dns.Msg) {
-	if !proxy.config.UseCache() || proxy.cache == nil {
-		return
-	}
-	proxy.cache.Set(req, rsp)
 }
 
 func logRequest(m *dns.Msg, cacheHit bool, d time.Duration) {

@@ -79,6 +79,22 @@ func (cache *Cache) Set(req *dns.Msg, msg *dns.Msg) {
 	}, 0)
 }
 
+func (cache *Cache) SetFromRR(rr dns.RR) {
+	req := dns.Msg{
+		Question: []dns.Question{
+			{
+				Name:  rr.Header().Name,
+				Qtype: rr.Header().Rrtype,
+			},
+		},
+	}
+	msg := dns.Msg{
+		Answer: []dns.RR{rr},
+	}
+
+	cache.Set(&req, &msg)
+}
+
 func keying(req *dns.Msg) string {
 	key := ""
 	for _, q := range req.Question {

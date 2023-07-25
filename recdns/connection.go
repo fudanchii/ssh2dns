@@ -1,15 +1,40 @@
-package proxy
+package recdns
 
 import (
+	"context"
 	"encoding/binary"
 	"io"
 	"net"
 
+	"github.com/fudanchii/ssh2dns/errors"
 	"github.com/miekg/dns"
 )
 
 type Connection struct {
 	net.Conn
+}
+
+func (pc *Connection) ReadMsgWithContext(ctx context.Context) (*dns.Msg, error) {
+	errChan := make(chan error, 1)
+	msgChan := make(chan *dns.Msg, 1)
+
+	go func() {
+		msg, err := pc.ReadMsg()
+		if err != nil {
+			errChan <- err
+		}
+
+		msgChan <- msg
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, errors.ConnectionTimeout{}
+	case err := <-errChan:
+		return nil, err
+	case msg := <-msgChan:
+		return msg, nil
+	}
 }
 
 // https://github.com/miekg/dns/blob/164b22ef9acc6ebfaef7169ab51caaef67390823/client.go#L191
@@ -44,6 +69,20 @@ func (pc *Connection) ReadMsgHdr(h *dns.Header) ([]byte, error) {
 	_, err = tcpRead(pc, p)
 
 	return p, err
+}
+
+func (pc *Connection) WriteMsgWithContext(ctx context.Context, msg *dns.Msg) error {
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- pc.WriteMsg(msg)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return errors.ConnectionTimeout{}
+	case err := <-errChan:
+		return err
+	}
 }
 
 // https://github.com/miekg/dns/blob/164b22ef9acc6ebfaef7169ab51caaef67390823/client.go#L334
