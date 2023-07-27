@@ -80,11 +80,6 @@ func (proxy *Proxy) handler(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 
-	if msg == nil {
-		log.Err(fmt.Sprintf("[%s] err : %#v, hit: %t, response is nil", r.Question[0].Name, err, hit))
-		return
-	}
-
 	if len(msg.Answer) > 0 {
 		rsp.Answer = msg.Answer
 	}
