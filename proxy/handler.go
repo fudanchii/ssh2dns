@@ -3,7 +3,6 @@ package proxy
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/fudanchii/ssh2dns/config"
@@ -81,6 +80,11 @@ func (proxy *Proxy) handler(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 
+	if msg == nil {
+		log.Err(fmt.Sprintf("[%s] err : %#v, hit: %t, response is nil", r.Question[0].Name, err, hit))
+		return
+	}
+
 	if len(msg.Answer) > 0 {
 		rsp.Answer = msg.Answer
 	}
@@ -117,7 +121,7 @@ func (proxy *Proxy) Shutdown() {
 }
 
 func (proxy *Proxy) singleFlightRequestHandler(r *dns.Msg) (*dns.Msg, error) {
-	rsp, err, _ := proxy.flightGroup.Do(strconv.Itoa(int(r.MsgHdr.Id)), func() (interface{}, error) {
+	rsp, err, _ := proxy.flightGroup.Do(fmt.Sprintf("%s:%d", r.Question[0].Name, r.Question[0].Qtype), func() (interface{}, error) {
 		rspChannel := make(chan *dns.Msg, 1)
 		errChannel := make(chan error, 1)
 

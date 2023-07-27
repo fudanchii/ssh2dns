@@ -1,13 +1,18 @@
 package errors
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/miekg/dns"
+)
 
 type NetworkIssue struct {
 	Reason error
 }
 
 func (n NetworkIssue) Error() string {
-	return fmt.Sprintf("NetworkIssue: %s", n.Reason.Error())
+	return fmt.Sprintf("network issue: %s", n.Reason.Error())
 }
 
 type DomainNotFound struct {
@@ -15,11 +20,36 @@ type DomainNotFound struct {
 }
 
 func (d DomainNotFound) Error() string {
-	return fmt.Sprintf("[%s] domain not found", d.N)
+	return fmt.Sprintf("domain not found: %s", d.N)
 }
 
 type ConnectionTimeout struct{}
 
 func (ct ConnectionTimeout) Error() string {
 	return "connection timeout"
+}
+
+type AuthorityIsNotNS struct {
+	Ns dns.RR
+}
+
+func (a AuthorityIsNotNS) Error() string {
+	return fmt.Sprintf("authority record is not an NS:\n\t%s", a.Ns.String())
+}
+
+type NoARecordsForNS struct {
+	Ns    *dns.NS
+	Extra []dns.RR
+}
+
+func (n NoARecordsForNS) Error() string {
+	return fmt.Sprintf("no A record in extra for the following NS: %s\n\t%s", n.Ns.Ns, n.listExtra())
+}
+
+func (n NoARecordsForNS) listExtra() string {
+	response := []string{}
+	for _, extra := range n.Extra {
+		response = append(response, extra.String())
+	}
+	return strings.Join(response, "\n")
 }

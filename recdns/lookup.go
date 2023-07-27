@@ -86,7 +86,11 @@ func (lc *LookupCoordinator) useNextNS(msg *dns.Msg, response *dns.Msg, sshCli *
 	)
 	if len(response.Ns) > 0 && len(response.Extra) > 0 {
 		for _, ns := range response.Ns {
-			nextNs, _ := ns.(*dns.NS)
+			nextNs, ok := ns.(*dns.NS)
+			if !ok {
+				err = errors.AuthorityIsNotNS{Ns: ns}
+				continue
+			}
 			nextSrv := lo.Filter(response.Extra, func(item dns.RR, _ int) bool {
 				if a, ok := item.(*dns.A); ok {
 					return a.Header().Name == nextNs.Ns
@@ -94,7 +98,7 @@ func (lc *LookupCoordinator) useNextNS(msg *dns.Msg, response *dns.Msg, sshCli *
 				return false
 			})
 			if len(nextSrv) == 0 {
-				err = errors.DomainNotFound{}
+				err = errors.NoARecordsForNS{Ns: nextNs, Extra: response.Extra}
 				continue
 			}
 			newSrv := nextSrv[0].(*dns.A).A
@@ -109,6 +113,7 @@ func (lc *LookupCoordinator) useNextNS(msg *dns.Msg, response *dns.Msg, sshCli *
 		for _, ns_ := range response.Ns {
 			ns, ok := ns_.(*dns.NS)
 			if !ok {
+				err = errors.AuthorityIsNotNS{Ns: ns_}
 				continue
 			}
 			nsQMsg := newQuestionMsg(ns.Ns)
@@ -131,7 +136,27 @@ func (lc *LookupCoordinator) useNextNS(msg *dns.Msg, response *dns.Msg, sshCli *
 }
 
 func (lc *LookupCoordinator) Handle(msg *dns.Msg, sshClient *ssh.Client) (*dns.Msg, error) {
-	return lc.tryHandleFromRoots(msg, sshClient)
+	errChan := make(chan error, 1)
+	msgChan := make(chan *dns.Msg, 1)
+	ctx, cancel := context.WithTimeout(context.TODO(), defaultTimeout)
+	defer cancel()
+	go func() {
+		msg, err := lc.tryHandleFromRoots(msg, sshClient)
+		if err != nil {
+			errChan <- err
+		} else {
+			msgChan <- msg
+		}
+	}()
+
+	select {
+	case msg := <-msgChan:
+		return msg, nil
+	case err := <-errChan:
+		return nil, err
+	case <-ctx.Done():
+		return lc.handleRecursive(msg, sshClient, net.IPv4(8, 8, 8, 8))
+	}
 }
 
 func (lc *LookupCoordinator) tryHandleFromRoots(msg *dns.Msg, sshClient *ssh.Client) (*dns.Msg, error) {
@@ -150,7 +175,9 @@ func (lc *LookupCoordinator) assertAnswerForQuestion(question *dns.Msg, answer *
 	}) {
 		return answer, nil
 	}
-	if answer.Answer[0].Header().Rrtype == dns.TypeCNAME {
+	if answer.Answer[0].Header().Rrtype == dns.TypeCNAME && !lo.ContainsBy(answer.Answer, func(rr dns.RR) bool {
+		return rr.Header().Rrtype == dns.TypeA
+	}) {
 		cname, _ := answer.Answer[0].(*dns.CNAME)
 		cnameQMsg := newQuestionMsg(cname.Target)
 		newAnswer, err := lc.tryHandleFromRoots(cnameQMsg, sshCli)
