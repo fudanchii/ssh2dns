@@ -81,56 +81,66 @@ func (lc *LookupCoordinator) handleRecursive(msg *dns.Msg, sshCli *ssh.Client, s
 
 func (lc *LookupCoordinator) useNextNS(msg *dns.Msg, response *dns.Msg, sshCli *ssh.Client) (*dns.Msg, error) {
 	var (
-		err    error
-		result *dns.Msg
+		err     error
+		result  *dns.Msg
+		nextSrv []dns.RR
+		extra   []dns.RR
 	)
-	if len(response.Ns) > 0 && len(response.Extra) > 0 {
-		for _, ns := range response.Ns {
-			nextNs, ok := ns.(*dns.NS)
-			if !ok {
+
+	for _, ns := range response.Ns {
+		nextNsString := ""
+		nextNs, ok := ns.(*dns.NS)
+		if !ok {
+			if soa, ok := ns.(*dns.SOA); ok {
+				nextNsString = soa.Ns
+			} else {
 				err = errors.AuthorityIsNotNS{Ns: ns}
 				continue
 			}
-			nextSrv := lo.Filter(response.Extra, func(item dns.RR, _ int) bool {
+		} else {
+			nextNsString = nextNs.Ns
+		}
+
+		if len(response.Extra) > 0 {
+			nextSrv = lo.Filter(response.Extra, func(item dns.RR, _ int) bool {
 				if a, ok := item.(*dns.A); ok {
-					return a.Header().Name == nextNs.Ns
+					return a.Header().Name == nextNsString
 				}
 				return false
 			})
-			if len(nextSrv) == 0 {
-				err = errors.NoARecordsForNS{Ns: nextNs, Extra: response.Extra}
-				continue
+
+			extra = response.Extra
+		} else {
+			nsQMsg := newQuestionMsg(nextNsString)
+			nextNsAnswer, exist := lc.CacheLookup(nsQMsg)
+			if !exist {
+				nextNsAnswer, err = lc.tryHandleFromRoots(nsQMsg, sshCli)
+				if err != nil {
+					return nil, err
+				}
 			}
-			newSrv := nextSrv[0].(*dns.A).A
+
+			nextSrv = lo.Filter(nextNsAnswer.Answer, func(item dns.RR, _ int) bool {
+				_, ok := item.(*dns.A)
+				return ok
+			})
+
+			extra = nextNsAnswer.Extra
+		}
+
+		if len(nextSrv) == 0 {
+			err = errors.NoARecordsForNS{Ns: ns, Extra: extra}
+			continue
+		}
+
+		for _, nextDNS := range nextSrv {
+			newSrv := nextDNS.(*dns.A).A
 			result, err = lc.handleRecursive(msg, sshCli, newSrv)
 			if err != nil || result == nil || len(result.Answer) < 1 {
 				continue
 			}
 			return result, nil
 		}
-		return nil, err
-	} else if len(response.Ns) > 0 {
-		for _, ns_ := range response.Ns {
-			ns, ok := ns_.(*dns.NS)
-			if !ok {
-				err = errors.AuthorityIsNotNS{Ns: ns_}
-				continue
-			}
-			nsQMsg := newQuestionMsg(ns.Ns)
-			nextNs, exist := lc.CacheLookup(nsQMsg)
-			if !exist {
-				nextNs, err = lc.tryHandleFromRoots(nsQMsg, sshCli)
-				if err != nil {
-					return nil, err
-				}
-			}
-			result, err = lc.handleRecursive(msg, sshCli, nextNs.Answer[0].(*dns.A).A)
-			if err != nil || result == nil || len(result.Answer) < 1 {
-				continue
-			}
-			return result, nil
-		}
-		return nil, err
 	}
 	return nil, errors.DomainNotFound{N: msg.Question[0].Name}
 }

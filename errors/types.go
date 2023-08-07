@@ -38,12 +38,12 @@ func (a AuthorityIsNotNS) Error() string {
 }
 
 type NoARecordsForNS struct {
-	Ns    *dns.NS
+	Ns    dns.RR
 	Extra []dns.RR
 }
 
 func (n NoARecordsForNS) Error() string {
-	return fmt.Sprintf("no A record in extra for the following NS: %s\n\t%s", n.Ns.Ns, n.listExtra())
+	return fmt.Sprintf("no A record in extra for the following NS: %s\n\t%s", n.Ns.Header().Name, n.listExtra())
 }
 
 func (n NoARecordsForNS) listExtra() string {
