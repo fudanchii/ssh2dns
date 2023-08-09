@@ -53,3 +53,25 @@ func (n NoARecordsForNS) listExtra() string {
 	}
 	return strings.Join(response, "\n")
 }
+
+type DNSConnectionError struct {
+	Cause error
+}
+
+type DNSDialErr DNSConnectionError
+
+func (d DNSDialErr) Error() string {
+	return fmt.Sprintf("error dialing DNS: %s", d.Cause.Error())
+}
+
+type DNSWriteErr DNSConnectionError
+
+func (d DNSWriteErr) Error() string {
+	return fmt.Sprintf("error writing DNS request: %s", d.Cause.Error())
+}
+
+type DNSReadErr DNSConnectionError
+
+func (d DNSReadErr) Error() string {
+	return fmt.Sprintf("error reading DNS response: %s", d.Cause.Error())
+}

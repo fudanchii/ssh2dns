@@ -22,6 +22,7 @@ func (pc *Connection) ReadMsgWithContext(ctx context.Context) (*dns.Msg, error) 
 		msg, err := pc.ReadMsg()
 		if err != nil {
 			errChan <- err
+			return
 		}
 
 		msgChan <- msg

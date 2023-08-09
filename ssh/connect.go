@@ -25,10 +25,15 @@ func (cli *Client) DialTCPWithContext(ctx context.Context, addr string) (net.Con
 		connChannel      chan net.Conn = make(chan net.Conn, 1)
 	)
 
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	go func() {
 		conn, err := cli.Dial("tcp", addr)
 		if err != nil {
 			errResultChannel <- err
+			return
 		}
 		connChannel <- conn
 	}()

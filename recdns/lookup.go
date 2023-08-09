@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -44,7 +45,7 @@ func (lc *LookupCoordinator) handleRecursive(ctx context.Context, msg *dns.Msg, 
 
 	conn, err := sshCli.DialTCPWithContext(ctx, fmt.Sprintf("%s:53", srv.String()))
 	if err != nil {
-		return nil, fmt.Errorf("error dialing DNS: %s", err.Error())
+		return nil, errors.DNSDialErr{Cause: err}
 	}
 
 	closeConn := func() { conn.Close() }
@@ -53,12 +54,12 @@ func (lc *LookupCoordinator) handleRecursive(ctx context.Context, msg *dns.Msg, 
 
 	dnsConn := &Connection{Conn: conn}
 	if err = dnsConn.WriteMsgWithContext(ctx, msg); err != nil {
-		return nil, fmt.Errorf("error writing DNS request: %s", err.Error())
+		return nil, errors.DNSWriteErr{Cause: err}
 	}
 
 	rspMsg, err := dnsConn.ReadMsgWithContext(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("error reading DNS response: %s", err.Error())
+		return nil, errors.DNSReadErr{Cause: err}
 	}
 
 	if len(rspMsg.Answer) > 0 {
@@ -101,8 +102,8 @@ func (lc *LookupCoordinator) useNextNS(ctx context.Context, msg *dns.Msg, respon
 
 		if len(response.Extra) > 0 {
 			nextSrv = lo.Filter(response.Extra, func(item dns.RR, _ int) bool {
-				if a, ok := item.(*dns.A); ok {
-					return a.Header().Name == nextNsString
+				if item.Header().Rrtype == dns.TypeA {
+					return item.Header().Name == nextNsString
 				}
 				return false
 			})
@@ -119,8 +120,7 @@ func (lc *LookupCoordinator) useNextNS(ctx context.Context, msg *dns.Msg, respon
 			}
 
 			nextSrv = lo.Filter(nextNsAnswer.Answer, func(item dns.RR, _ int) bool {
-				_, ok := item.(*dns.A)
-				return ok
+				return item.Header().Rrtype == dns.TypeA
 			})
 
 			extra = nextNsAnswer.Extra
@@ -192,13 +192,13 @@ func (lc *LookupCoordinator) assertAnswerForQuestion(ctx context.Context, questi
 		return nil, ctx.Err()
 	}
 
-	if lo.ContainsBy(answer.Answer, func(rr dns.RR) bool {
+	if slices.ContainsFunc(answer.Answer, func(rr dns.RR) bool {
 		return rr.Header().Rrtype == question.Question[0].Qtype
 	}) {
 		return answer, nil
 	}
 
-	if answer.Answer[0].Header().Rrtype == dns.TypeCNAME && !lo.ContainsBy(answer.Answer, func(rr dns.RR) bool {
+	if answer.Answer[0].Header().Rrtype == dns.TypeCNAME && !slices.ContainsFunc(answer.Answer, func(rr dns.RR) bool {
 		return rr.Header().Rrtype == dns.TypeA
 	}) {
 		cname, _ := answer.Answer[0].(*dns.CNAME)
