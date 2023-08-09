@@ -1,29 +1,29 @@
 module github.com/fudanchii/ssh2dns
 
-go 1.19
+go 1.21
 
 require (
-	github.com/dgraph-io/ristretto v0.1.0
-	github.com/jackc/puddle/v2 v2.2.0
-	github.com/miekg/dns v1.1.50
+	github.com/dgraph-io/ristretto v0.1.1
+	github.com/jackc/puddle/v2 v2.2.1
+	github.com/miekg/dns v1.1.55
 	github.com/samber/lo v1.38.1
 	github.com/sourcegraph/conc v0.3.0
-	go.uber.org/dig v1.15.0
-	golang.org/x/crypto v0.0.0-20220926161630-eccd6366d1be
-	golang.org/x/sync v0.1.0
+	go.uber.org/dig v1.17.0
+	golang.org/x/crypto v0.12.0
+	golang.org/x/sync v0.3.0
 )
 
 require (
-	github.com/cespare/xxhash/v2 v2.1.2 // indirect
-	github.com/dustin/go-humanize v1.0.0 // indirect
-	github.com/golang/glog v1.0.0 // indirect
+	github.com/cespare/xxhash/v2 v2.2.0 // indirect
+	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/golang/glog v1.1.1 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	go.uber.org/atomic v1.7.0 // indirect
-	go.uber.org/multierr v1.9.0 // indirect
-	golang.org/x/exp v0.0.0-20220303212507-bbda1eaf7a17 // indirect
-	golang.org/x/mod v0.6.0-dev.0.20211013180041-c96bc1413d57 // indirect
-	golang.org/x/net v0.7.0 // indirect
-	golang.org/x/sys v0.5.0 // indirect
-	golang.org/x/tools v0.1.8-0.20211029000441-d6a9af8af023 // indirect
-	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
+	go.uber.org/multierr v1.11.0 // indirect
+	golang.org/x/exp v0.0.0-20230807204917-050eac23e9de // indirect
+	golang.org/x/mod v0.12.0 // indirect
+	golang.org/x/net v0.14.0 // indirect
+	golang.org/x/sys v0.11.0 // indirect
+	golang.org/x/tools v0.12.0 // indirect
+	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
 )
