@@ -2,7 +2,6 @@ package recdns
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"slices"
 	"strings"
@@ -43,7 +42,7 @@ func (lc *LookupCoordinator) handleRecursive(ctx context.Context, msg *dns.Msg, 
 		return nil, ctx.Err()
 	}
 
-	conn, err := sshCli.DialTCPWithContext(ctx, fmt.Sprintf("%s:53", srv.String()))
+	conn, err := sshCli.DialTCPWithContext(ctx, strings.Join([]string{srv.String(), "53"}, ":"))
 	if err != nil {
 		return nil, errors.DNSDialErr{Cause: err}
 	}
