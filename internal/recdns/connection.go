@@ -6,7 +6,7 @@ import (
 	"io"
 	"net"
 
-	"github.com/fudanchii/ssh2dns/errors"
+	"github.com/fudanchii/ssh2dns/internal/errors"
 	"github.com/miekg/dns"
 )
 

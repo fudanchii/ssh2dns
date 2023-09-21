@@ -2,6 +2,7 @@ package config
 
 import (
 	"flag"
+	"net"
 	"os"
 	"path"
 	"runtime"
@@ -110,6 +111,14 @@ func (c *AppConfig) HostKey() string {
 
 func (c *AppConfig) TargetServer() string {
 	return c.targetServer
+}
+
+func (c *AppConfig) TargetServerIPv4() net.IP {
+	host, _, err := net.SplitHostPort(c.targetServer)
+	if err != nil {
+		host = "8.8.8.8"
+	}
+	return net.ParseIP(host)
 }
 
 func (c *AppConfig) ConnTimeout() int {

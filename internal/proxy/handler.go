@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/fudanchii/ssh2dns/config"
-	"github.com/fudanchii/ssh2dns/log"
-	"github.com/fudanchii/ssh2dns/recdns"
-	"github.com/fudanchii/ssh2dns/ssh"
+	"github.com/fudanchii/ssh2dns/internal/config"
+	"github.com/fudanchii/ssh2dns/internal/log"
+	"github.com/fudanchii/ssh2dns/internal/recdns"
+	"github.com/fudanchii/ssh2dns/internal/ssh"
 
 	"github.com/miekg/dns"
 	"github.com/sourcegraph/conc/pool"

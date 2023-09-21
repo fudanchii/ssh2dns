@@ -8,17 +8,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fudanchii/ssh2dns/cache"
-	"github.com/fudanchii/ssh2dns/config"
-	"github.com/fudanchii/ssh2dns/errors"
-	"github.com/fudanchii/ssh2dns/ssh"
+	"github.com/fudanchii/ssh2dns/internal/cache"
+	"github.com/fudanchii/ssh2dns/internal/config"
+	"github.com/fudanchii/ssh2dns/internal/errors"
+	"github.com/fudanchii/ssh2dns/internal/ssh"
 	"github.com/miekg/dns"
 	"github.com/samber/lo"
 )
 
 type LookupCoordinator struct {
-	cache   *cache.Cache
-	rootMap []*dns.A
+	cache            *cache.Cache
+	rootMap          []*dns.A
+	fallbackTargetNS net.IP
 }
 
 var (
@@ -28,8 +29,9 @@ var (
 func New(cfg *config.AppConfig) *LookupCoordinator {
 	cc := cache.New(cfg)
 	lc := &LookupCoordinator{
-		cache:   cc,
-		rootMap: []*dns.A{},
+		cache:            cc,
+		rootMap:          []*dns.A{},
+		fallbackTargetNS: cfg.TargetServerIPv4(),
 	}
 	lc.setup()
 	return lc
@@ -168,7 +170,7 @@ func (lc *LookupCoordinator) Handle(msg *dns.Msg, sshClient *ssh.Client) (*dns.M
 	case <-ctx.Done():
 		ctx, cancel := context.WithTimeout(context.TODO(), defaultTimeout)
 		defer cancel()
-		return lc.handleRecursive(ctx, msg, sshClient, net.IPv4(8, 8, 8, 8))
+		return lc.handleRecursive(ctx, msg, sshClient, lc.fallbackTargetNS)
 	}
 }
 

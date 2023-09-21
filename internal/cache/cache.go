@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/fudanchii/ssh2dns/config"
-	"github.com/fudanchii/ssh2dns/log"
+	"github.com/fudanchii/ssh2dns/internal/config"
+	"github.com/fudanchii/ssh2dns/internal/log"
 
 	"github.com/dgraph-io/ristretto"
 	"github.com/miekg/dns"

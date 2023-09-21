@@ -8,9 +8,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/fudanchii/ssh2dns/config"
-	"github.com/fudanchii/ssh2dns/errors"
-	"github.com/fudanchii/ssh2dns/log"
+	"github.com/fudanchii/ssh2dns/internal/config"
+	"github.com/fudanchii/ssh2dns/internal/errors"
+	"github.com/fudanchii/ssh2dns/internal/log"
 	"github.com/jackc/puddle/v2"
 	"golang.org/x/crypto/ssh"
 )
