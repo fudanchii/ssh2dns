@@ -1,6 +1,7 @@
 package errors
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -18,6 +19,17 @@ func (n NetworkIssue) Error() string {
 type DomainNotFound struct {
 	N   string
 	Err error
+}
+
+func (d DomainNotFound) Wrap(err error) DomainNotFound {
+	if !errors.Is(err, d) {
+		d.Err = err
+	}
+	return d
+}
+
+func (d DomainNotFound) Unwrap() error {
+	return d.Err
 }
 
 func (d DomainNotFound) Error() string {

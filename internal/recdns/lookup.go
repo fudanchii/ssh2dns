@@ -145,7 +145,7 @@ func (lc *LookupCoordinator) useNextNS(ctx context.Context, msg *dns.Msg, respon
 			return result, nil
 		}
 	}
-	return nil, errors.DomainNotFound{N: msg.Question[0].Name, Err: err}
+	return nil, err
 }
 
 func (lc *LookupCoordinator) Handle(msg *dns.Msg, sshClient *ssh.Client) (*dns.Msg, error) {
@@ -166,26 +166,30 @@ func (lc *LookupCoordinator) Handle(msg *dns.Msg, sshClient *ssh.Client) (*dns.M
 	case msg := <-msgChan:
 		return msg, nil
 	case err := <-errChan:
-		return nil, err
+		return nil, errors.DomainNotFound{N: msg.Question[0].Name}.Wrap(err)
 	case <-ctx.Done():
 		ctx, cancel := context.WithTimeout(context.TODO(), defaultTimeout)
 		defer cancel()
-		return lc.handleRecursive(ctx, msg, sshClient, lc.fallbackTargetNS)
+		msg, err := lc.handleRecursive(ctx, msg, sshClient, lc.fallbackTargetNS)
+		if err != nil {
+			return nil, errors.DomainNotFound{N: msg.Question[0].Name}.Wrap(err)
+		}
+		return msg, nil
 	}
 }
 
-func (lc *LookupCoordinator) tryHandleFromRoots(ctx context.Context, msg *dns.Msg, sshClient *ssh.Client) (*dns.Msg, error) {
+func (lc *LookupCoordinator) tryHandleFromRoots(ctx context.Context, msg *dns.Msg, sshClient *ssh.Client) (answerMsg *dns.Msg, err error) {
 	for _, ns := range lc.rootMap {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 
-		answerMsg, err := lc.handleRecursive(ctx, msg, sshClient, ns.A)
+		answerMsg, err = lc.handleRecursive(ctx, msg, sshClient, ns.A)
 		if err == nil && answerMsg != nil && len(answerMsg.Answer) > 0 {
 			return answerMsg, nil
 		}
 	}
-	return nil, errors.DomainNotFound{N: msg.Question[0].Name}
+	return nil, err
 }
 
 func (lc *LookupCoordinator) assertAnswerForQuestion(ctx context.Context, question *dns.Msg, answer *dns.Msg, sshCli *ssh.Client) (*dns.Msg, error) {
