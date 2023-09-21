@@ -170,11 +170,11 @@ func (lc *LookupCoordinator) Handle(msg *dns.Msg, sshClient *ssh.Client) (*dns.M
 	case <-ctx.Done():
 		ctx, cancel := context.WithTimeout(context.TODO(), defaultTimeout)
 		defer cancel()
-		msg, err := lc.handleRecursive(ctx, msg, sshClient, lc.fallbackTargetNS)
+		answer, err := lc.handleRecursive(ctx, msg, sshClient, lc.fallbackTargetNS)
 		if err != nil {
 			return nil, errors.DomainNotFound{N: msg.Question[0].Name}.Wrap(err)
 		}
-		return msg, nil
+		return answer, nil
 	}
 }
 
