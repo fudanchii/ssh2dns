@@ -145,7 +145,7 @@ func (lc *LookupCoordinator) useNextNS(ctx context.Context, msg *dns.Msg, respon
 			return result, nil
 		}
 	}
-	return nil, errors.DomainNotFound{N: msg.Question[0].Name}
+	return nil, errors.DomainNotFound{N: msg.Question[0].Name, Err: err}
 }
 
 func (lc *LookupCoordinator) Handle(msg *dns.Msg, sshClient *ssh.Client) (*dns.Msg, error) {

@@ -16,11 +16,12 @@ func (n NetworkIssue) Error() string {
 }
 
 type DomainNotFound struct {
-	N string
+	N   string
+	Err error
 }
 
 func (d DomainNotFound) Error() string {
-	return fmt.Sprintf("domain not found: %s", d.N)
+	return fmt.Sprintf("domain not found: %s, cause: %s", d.N, d.Err.Error())
 }
 
 type ConnectionTimeout struct{}
