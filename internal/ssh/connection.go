@@ -1,4 +1,4 @@
-package recdns
+package ssh
 
 import (
 	"context"
