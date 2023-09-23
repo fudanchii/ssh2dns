@@ -143,12 +143,7 @@ func (lc *LookupCoordinator) Handle(msg *dns.Msg, cli DNSClient) (*dns.Msg, erro
 		}
 	}()
 
-	select {
-	case msg := <-msgChan:
-		return msg, nil
-	case err := <-errChan:
-		return nil, errors.DomainNotFound{N: msg.Question[0].Name}.Wrap(err)
-	case <-ctx.Done():
+	fallbackLookup := func() (*dns.Msg, error) {
 		ctx, cancel := context.WithTimeout(context.TODO(), defaultTimeout)
 		defer cancel()
 		answer, err := lc.handleRecursive(ctx, msg, cli, lc.fallbackTargetNS)
@@ -156,6 +151,15 @@ func (lc *LookupCoordinator) Handle(msg *dns.Msg, cli DNSClient) (*dns.Msg, erro
 			return nil, errors.DomainNotFound{N: msg.Question[0].Name}.Wrap(err)
 		}
 		return answer, nil
+	}
+
+	select {
+	case msg := <-msgChan:
+		return msg, nil
+	case _ = <-errChan:
+		return fallbackLookup()
+	case <-ctx.Done():
+		return fallbackLookup()
 	}
 }
 
