@@ -156,7 +156,7 @@ func (lc *LookupCoordinator) Handle(msg *dns.Msg, cli DNSClient) (*dns.Msg, erro
 	select {
 	case msg := <-msgChan:
 		return msg, nil
-	case _ = <-errChan:
+	case <-errChan:
 		return fallbackLookup()
 	case <-ctx.Done():
 		return fallbackLookup()
