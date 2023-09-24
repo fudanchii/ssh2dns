@@ -37,28 +37,35 @@ func New(cfg *config.AppConfig, clientPool DNSClientPool) *LookupCoordinator {
 	return lc
 }
 
-func (lc *LookupCoordinator) handleRecursive(ctx context.Context, msg *dns.Msg, cli DNSClient, srv net.IP) (*dns.Msg, error) {
+func (lc *LookupCoordinator) handleRecursive(ctx context.Context, msg *dns.Msg, srv net.IP) (*dns.Msg, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
 
-	rspMsg, err := cli.ExchangeWithContext(ctx, msg, strings.Join([]string{srv.String(), "53"}, ":"))
+	cli, err := lc.clientPool.Acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	defer cli.Release()
+
+	rspMsg, err := cli.Value().ExchangeWithContext(ctx, msg, strings.Join([]string{srv.String(), "53"}, ":"))
 	if err != nil {
 		return nil, err
 	}
 
 	if len(rspMsg.Answer) > 0 {
-		rspMsg, err := lc.assertAnswerForQuestion(ctx, msg, rspMsg, cli)
+		rspMsg, err := lc.assertAnswerForQuestion(ctx, msg, rspMsg)
 		if err == nil {
 			lc.cache.Set(msg, rspMsg)
 			return rspMsg, nil
 		}
 	}
 
-	return lc.useNextNS(ctx, msg, rspMsg, cli)
+	return lc.useNextNS(ctx, msg, rspMsg)
 }
 
-func (lc *LookupCoordinator) useNextNS(ctx context.Context, msg *dns.Msg, response *dns.Msg, cli DNSClient) (*dns.Msg, error) {
+func (lc *LookupCoordinator) useNextNS(ctx context.Context, msg *dns.Msg, response *dns.Msg) (*dns.Msg, error) {
 	var (
 		err     error
 		result  *dns.Msg
@@ -97,7 +104,7 @@ func (lc *LookupCoordinator) useNextNS(ctx context.Context, msg *dns.Msg, respon
 			nsQMsg := newQuestionMsg(nextNsString)
 			nextNsAnswer, exist := lc.CacheLookup(nsQMsg)
 			if !exist {
-				nextNsAnswer, err = lc.tryHandleFromRoots(ctx, nsQMsg, cli)
+				nextNsAnswer, err = lc.tryHandleFromRoots(ctx, nsQMsg)
 				if err != nil {
 					return nil, err
 				}
@@ -121,7 +128,7 @@ func (lc *LookupCoordinator) useNextNS(ctx context.Context, msg *dns.Msg, respon
 			}
 
 			newSrv := nextDNS.(*dns.A).A
-			result, err = lc.handleRecursive(ctx, msg, cli, newSrv)
+			result, err = lc.handleRecursive(ctx, msg, newSrv)
 			if err != nil || result == nil || len(result.Answer) < 1 {
 				continue
 			}
@@ -132,22 +139,13 @@ func (lc *LookupCoordinator) useNextNS(ctx context.Context, msg *dns.Msg, respon
 }
 
 func (lc *LookupCoordinator) Handle(msg *dns.Msg) (*dns.Msg, error) {
-	acqCtx, cancel := context.WithTimeout(context.TODO(), defaultTimeout)
-	cli, err := lc.clientPool.Acquire(acqCtx)
-	cancel()
-	if err != nil {
-		return nil, err
-	}
-
-	defer cli.Release()
-
 	errChan := make(chan error, 1)
 	msgChan := make(chan *dns.Msg, 1)
 	ctx, cancel := context.WithTimeout(context.TODO(), defaultTimeout)
 	defer cancel()
 
 	go func() {
-		msg, err := lc.tryHandleFromRoots(ctx, msg, cli.Value())
+		msg, err := lc.tryHandleFromRoots(ctx, msg)
 		if err != nil {
 			errChan <- err
 		} else {
@@ -158,7 +156,7 @@ func (lc *LookupCoordinator) Handle(msg *dns.Msg) (*dns.Msg, error) {
 	fallbackLookup := func() (*dns.Msg, error) {
 		ctx, cancel := context.WithTimeout(context.TODO(), defaultTimeout)
 		defer cancel()
-		answer, err := lc.handleRecursive(ctx, msg, cli.Value(), lc.fallbackTargetNS)
+		answer, err := lc.handleRecursive(ctx, msg, lc.fallbackTargetNS)
 		if err != nil {
 			return nil, errors.DomainNotFound{N: msg.Question[0].Name}.Wrap(err)
 		}
@@ -175,13 +173,13 @@ func (lc *LookupCoordinator) Handle(msg *dns.Msg) (*dns.Msg, error) {
 	}
 }
 
-func (lc *LookupCoordinator) tryHandleFromRoots(ctx context.Context, msg *dns.Msg, cli DNSClient) (answerMsg *dns.Msg, err error) {
+func (lc *LookupCoordinator) tryHandleFromRoots(ctx context.Context, msg *dns.Msg) (answerMsg *dns.Msg, err error) {
 	for _, ns := range lc.rootMap {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 
-		answerMsg, err = lc.handleRecursive(ctx, msg, cli, ns.A)
+		answerMsg, err = lc.handleRecursive(ctx, msg, ns.A)
 		if err == nil && answerMsg != nil && len(answerMsg.Answer) > 0 {
 			return answerMsg, nil
 		}
@@ -189,7 +187,7 @@ func (lc *LookupCoordinator) tryHandleFromRoots(ctx context.Context, msg *dns.Ms
 	return nil, err
 }
 
-func (lc *LookupCoordinator) assertAnswerForQuestion(ctx context.Context, question *dns.Msg, answer *dns.Msg, cli DNSClient) (*dns.Msg, error) {
+func (lc *LookupCoordinator) assertAnswerForQuestion(ctx context.Context, question *dns.Msg, answer *dns.Msg) (*dns.Msg, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
@@ -205,7 +203,7 @@ func (lc *LookupCoordinator) assertAnswerForQuestion(ctx context.Context, questi
 	}) {
 		cname, _ := answer.Answer[0].(*dns.CNAME)
 		cnameQMsg := newQuestionMsg(cname.Target)
-		newAnswer, err := lc.tryHandleFromRoots(ctx, cnameQMsg, cli)
+		newAnswer, err := lc.tryHandleFromRoots(ctx, cnameQMsg)
 		if err != nil {
 			return nil, err
 		}
