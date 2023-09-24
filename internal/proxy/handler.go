@@ -17,7 +17,6 @@ import (
 
 type proxyRequest struct {
 	message    *dns.Msg
-	sshClient  *ssh.Client
 	rspChannel chan *dns.Msg
 	errChannel chan error
 }
@@ -27,17 +26,15 @@ type Proxy struct {
 	workers     *pool.Pool
 	flightGroup singleflight.Group
 	config      *config.AppConfig
-	clientPool  *ssh.ClientPool
 	rdns        *recdns.LookupCoordinator
 }
 
 func New(cfg *config.AppConfig, clientPool *ssh.ClientPool) *Proxy {
 	var proxy = Proxy{
-		config:     cfg,
-		clientPool: clientPool,
-		workers:    pool.New().WithMaxGoroutines(cfg.WorkerNum() * 2),
-		srv:        &dns.Server{Addr: cfg.BindAddr(), Net: "udp"},
-		rdns:       recdns.New(cfg),
+		config:  cfg,
+		workers: pool.New().WithMaxGoroutines(cfg.WorkerNum() * 2),
+		srv:     &dns.Server{Addr: cfg.BindAddr(), Net: "udp"},
+		rdns:    recdns.New(cfg, clientPool),
 	}
 
 	dns.HandleFunc(".", proxy.handler)
@@ -46,7 +43,7 @@ func New(cfg *config.AppConfig, clientPool *ssh.ClientPool) *Proxy {
 }
 
 func (proxy *Proxy) handleRequest(req *proxyRequest) {
-	rspMessage, err := proxy.rdns.Handle(req.message, req.sshClient)
+	rspMessage, err := proxy.rdns.Handle(req.message)
 
 	if err != nil {
 		req.errChannel <- fmt.Errorf("error handling lookup: %s", err.Error())
@@ -112,7 +109,7 @@ func (proxy *Proxy) Shutdown() {
 	log.Info("waiting workers to finish...")
 	proxy.workers.Wait()
 	log.Info("closing remote connections...")
-	proxy.clientPool.Close()
+	proxy.rdns.Close()
 }
 
 func (proxy *Proxy) singleFlightRequestHandler(r *dns.Msg) (*dns.Msg, error) {
@@ -120,15 +117,8 @@ func (proxy *Proxy) singleFlightRequestHandler(r *dns.Msg) (*dns.Msg, error) {
 		rspChannel := make(chan *dns.Msg, 1)
 		errChannel := make(chan error, 1)
 
-		sshClient, err := proxy.clientPool.Acquire(context.TODO())
-		if err != nil {
-			return nil, err
-		}
-		defer sshClient.Release()
-
 		pReq := &proxyRequest{
 			message:    r,
-			sshClient:  sshClient.Value(),
 			rspChannel: rspChannel,
 			errChannel: errChannel,
 		}

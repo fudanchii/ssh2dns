@@ -18,18 +18,20 @@ type LookupCoordinator struct {
 	cache            *cache.Cache
 	rootMap          []*dns.A
 	fallbackTargetNS net.IP
+	clientPool       DNSClientPool
 }
 
 var (
 	defaultTimeout time.Duration = time.Duration(5) * time.Second
 )
 
-func New(cfg *config.AppConfig) *LookupCoordinator {
+func New(cfg *config.AppConfig, clientPool DNSClientPool) *LookupCoordinator {
 	cc := cache.New(cfg)
 	lc := &LookupCoordinator{
 		cache:            cc,
 		rootMap:          []*dns.A{},
 		fallbackTargetNS: cfg.TargetServerIPv4(),
+		clientPool:       clientPool,
 	}
 	lc.setup()
 	return lc
@@ -129,13 +131,23 @@ func (lc *LookupCoordinator) useNextNS(ctx context.Context, msg *dns.Msg, respon
 	return nil, err
 }
 
-func (lc *LookupCoordinator) Handle(msg *dns.Msg, cli DNSClient) (*dns.Msg, error) {
+func (lc *LookupCoordinator) Handle(msg *dns.Msg) (*dns.Msg, error) {
+	acqCtx, cancel := context.WithTimeout(context.TODO(), defaultTimeout)
+	cli, err := lc.clientPool.Acquire(acqCtx)
+	cancel()
+	if err != nil {
+		return nil, err
+	}
+
+	defer cli.Release()
+
 	errChan := make(chan error, 1)
 	msgChan := make(chan *dns.Msg, 1)
 	ctx, cancel := context.WithTimeout(context.TODO(), defaultTimeout)
 	defer cancel()
+
 	go func() {
-		msg, err := lc.tryHandleFromRoots(ctx, msg, cli)
+		msg, err := lc.tryHandleFromRoots(ctx, msg, cli.Value())
 		if err != nil {
 			errChan <- err
 		} else {
@@ -146,7 +158,7 @@ func (lc *LookupCoordinator) Handle(msg *dns.Msg, cli DNSClient) (*dns.Msg, erro
 	fallbackLookup := func() (*dns.Msg, error) {
 		ctx, cancel := context.WithTimeout(context.TODO(), defaultTimeout)
 		defer cancel()
-		answer, err := lc.handleRecursive(ctx, msg, cli, lc.fallbackTargetNS)
+		answer, err := lc.handleRecursive(ctx, msg, cli.Value(), lc.fallbackTargetNS)
 		if err != nil {
 			return nil, errors.DomainNotFound{N: msg.Question[0].Name}.Wrap(err)
 		}
@@ -214,6 +226,10 @@ func (lc *LookupCoordinator) setup() {
 		}
 
 	}
+}
+
+func (lc *LookupCoordinator) Close() {
+	lc.clientPool.Close()
 }
 
 func (lc *LookupCoordinator) CacheLookup(req *dns.Msg) (*dns.Msg, bool) {

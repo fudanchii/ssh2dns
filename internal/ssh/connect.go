@@ -7,10 +7,12 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/fudanchii/ssh2dns/internal/config"
 	"github.com/fudanchii/ssh2dns/internal/errors"
 	"github.com/fudanchii/ssh2dns/internal/log"
+	"github.com/fudanchii/ssh2dns/internal/recdns"
 	"github.com/jackc/puddle/v2"
 	"golang.org/x/crypto/ssh"
 )
@@ -48,8 +50,8 @@ func (cli *Client) DialTCPWithContext(ctx context.Context, addr string) (net.Con
 	}
 }
 
-func createNewClient(cfg *config.AppConfig, signer ssh.Signer) puddle.Constructor[*Client] {
-	return func(_ context.Context) (*Client, error) {
+func createNewClient(cfg *config.AppConfig, signer ssh.Signer) puddle.Constructor[recdns.DNSClient] {
+	return func(_ context.Context) (recdns.DNSClient, error) {
 		client, err := ssh.Dial("tcp", cfg.RemoteAddr(), &ssh.ClientConfig{
 			User:            cfg.RemoteUser(),
 			Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
@@ -71,7 +73,7 @@ func createNewClient(cfg *config.AppConfig, signer ssh.Signer) puddle.Constructo
 	}
 }
 
-func dropClient(cli *Client) {
+func dropClient(cli recdns.DNSClient) {
 	if cli != nil {
 		cli.Close()
 		cli = nil
@@ -93,7 +95,7 @@ func newSigner(pkfile string) (ssh.Signer, error) {
 }
 
 type ClientPool struct {
-	*puddle.Pool[*Client]
+	pool   *puddle.Pool[recdns.DNSClient]
 	config *config.AppConfig
 	signer ssh.Signer
 }
@@ -104,7 +106,7 @@ func NewClientPool(cfg *config.AppConfig) (*ClientPool, error) {
 		return nil, err
 	}
 
-	ppool, err := puddle.NewPool(&puddle.Config[*Client]{
+	ppool, err := puddle.NewPool(&puddle.Config[recdns.DNSClient]{
 		Constructor: createNewClient(cfg, signer),
 		Destructor:  dropClient,
 		MaxSize:     int32(cfg.WorkerNum()),
@@ -114,18 +116,29 @@ func NewClientPool(cfg *config.AppConfig) (*ClientPool, error) {
 		return nil, err
 	}
 
+	initCtx, cancel := context.WithTimeout(context.TODO(), 5*time.Second)
+	defer cancel()
+
 	// try connecting first, bailout if we can't connect at init
-	cli, err := ppool.Acquire(context.Background())
+	cli, err := ppool.Acquire(initCtx)
 	if err != nil {
 		return nil, err
 	}
 	cli.Release()
 
 	return &ClientPool{
-		Pool:   ppool,
+		pool:   ppool,
 		signer: signer,
 		config: cfg,
 	}, nil
+}
+
+func (cp *ClientPool) Acquire(ctx context.Context) (recdns.PoolItemWrapper[recdns.DNSClient], error) {
+	return cp.pool.Acquire(ctx)
+}
+
+func (cp *ClientPool) Close() {
+	cp.pool.Close()
 }
 
 func safeHostKeyCallback(cfg *config.AppConfig) ssh.HostKeyCallback {
