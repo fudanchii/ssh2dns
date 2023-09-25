@@ -19,6 +19,7 @@ type LookupCoordinator struct {
 	rootMap          []*dns.A
 	fallbackTargetNS net.IP
 	clientPool       DNSClientPool
+	recursive        bool
 }
 
 var (
@@ -32,6 +33,7 @@ func New(cfg *config.AppConfig, clientPool DNSClientPool) *LookupCoordinator {
 		rootMap:          []*dns.A{},
 		fallbackTargetNS: cfg.TargetServerIPv4(),
 		clientPool:       clientPool,
+		recursive:        cfg.RecursiveLookup(),
 	}
 	lc.setup()
 	return lc
@@ -144,16 +146,10 @@ func (lc *LookupCoordinator) Handle(msg *dns.Msg) (*dns.Msg, error) {
 	ctx, cancel := context.WithTimeout(context.TODO(), defaultTimeout)
 	defer cancel()
 
-	go func() {
-		msg, err := lc.tryHandleFromRoots(ctx, msg)
-		if err != nil {
-			errChan <- err
-		} else {
-			msgChan <- msg
+	fallbackLookup := func(err error) (*dns.Msg, error) {
+		if err != nil && !lc.recursive {
+			return nil, err
 		}
-	}()
-
-	fallbackLookup := func() (*dns.Msg, error) {
 		ctx, cancel := context.WithTimeout(context.TODO(), defaultTimeout)
 		defer cancel()
 		answer, err := lc.handleRecursive(ctx, msg, lc.fallbackTargetNS)
@@ -163,13 +159,30 @@ func (lc *LookupCoordinator) Handle(msg *dns.Msg) (*dns.Msg, error) {
 		return answer, nil
 	}
 
+	go func() {
+		var (
+			msg *dns.Msg
+			err error
+		)
+		if lc.recursive {
+			msg, err = lc.tryHandleFromRoots(ctx, msg)
+		} else {
+			msg, err = fallbackLookup(nil)
+		}
+		if err != nil {
+			errChan <- err
+		} else {
+			msgChan <- msg
+		}
+	}()
+
 	select {
 	case msg := <-msgChan:
 		return msg, nil
-	case <-errChan:
-		return fallbackLookup()
+	case err := <-errChan:
+		return fallbackLookup(err)
 	case <-ctx.Done():
-		return fallbackLookup()
+		return fallbackLookup(errors.DomainNotFound{N: msg.Question[0].Name}.Wrap(ctx.Err()))
 	}
 }
 
