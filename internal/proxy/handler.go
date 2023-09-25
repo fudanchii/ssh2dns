@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/fudanchii/ssh2dns/internal/config"
+	"github.com/fudanchii/ssh2dns/internal/errors"
 	"github.com/fudanchii/ssh2dns/internal/log"
 	"github.com/fudanchii/ssh2dns/internal/recdns"
 	"github.com/fudanchii/ssh2dns/internal/ssh"
@@ -74,6 +75,11 @@ func (proxy *Proxy) handler(w dns.ResponseWriter, r *dns.Msg) {
 
 	if err != nil {
 		log.Err(err.Error())
+		return
+	}
+
+	if msg == nil {
+		log.Err(errors.DNSResponseNilWithoutError{N: r.Question[0].Name}.Error())
 		return
 	}
 

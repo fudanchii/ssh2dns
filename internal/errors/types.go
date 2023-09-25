@@ -88,3 +88,11 @@ type DNSReadErr DNSConnectionError
 func (d DNSReadErr) Error() string {
 	return fmt.Sprintf("error reading DNS response: %s", d.Cause.Error())
 }
+
+type DNSResponseNilWithoutError struct {
+	N string
+}
+
+func (d DNSResponseNilWithoutError) Error() string {
+	return fmt.Sprintf("%s: DNS response is nil without any error, this should not happen!", d.N)
+}
