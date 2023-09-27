@@ -12,7 +12,11 @@ type DNSClient interface {
 }
 
 type DNSClientPool interface {
-	Acquire(context.Context) (PoolItemWrapper[DNSClient], error)
+	Pool[DNSClient]
+}
+
+type Pool[T any] interface {
+	Acquire(context.Context) (PoolItemWrapper[T], error)
 	Close()
 }
 

@@ -3,10 +3,10 @@ package main
 import (
 	"os"
 
-	"github.com/fudanchii/ssh2dns/internal/cache"
 	"github.com/fudanchii/ssh2dns/internal/config"
 	"github.com/fudanchii/ssh2dns/internal/log"
 	"github.com/fudanchii/ssh2dns/internal/proxy"
+	"github.com/fudanchii/ssh2dns/internal/recdns"
 	"github.com/fudanchii/ssh2dns/internal/ssh"
 	"go.uber.org/dig"
 )
@@ -15,7 +15,7 @@ type Dependencies struct {
 	dig.In
 
 	Config     *config.AppConfig
-	ClientPool *ssh.ClientPool
+	ClientPool recdns.DNSClientPool
 	DNSProxy   *proxy.Proxy
 }
 
@@ -37,7 +37,6 @@ func (c *container) provide(cons ...interface{}) *dig.Container {
 func setupAppContainer() *dig.Container {
 	return (&container{dig.New()}).provide(
 		config.New,
-		cache.New,
 		ssh.NewClientPool,
 		proxy.New,
 	)

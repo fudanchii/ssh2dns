@@ -9,7 +9,6 @@ import (
 	"github.com/fudanchii/ssh2dns/internal/errors"
 	"github.com/fudanchii/ssh2dns/internal/log"
 	"github.com/fudanchii/ssh2dns/internal/recdns"
-	"github.com/fudanchii/ssh2dns/internal/ssh"
 
 	"github.com/miekg/dns"
 	"github.com/sourcegraph/conc/pool"
@@ -30,7 +29,7 @@ type Proxy struct {
 	rdns        *recdns.LookupCoordinator
 }
 
-func New(cfg *config.AppConfig, clientPool *ssh.ClientPool) *Proxy {
+func New(cfg *config.AppConfig, clientPool recdns.DNSClientPool) *Proxy {
 	var proxy = Proxy{
 		config:  cfg,
 		workers: pool.New().WithMaxGoroutines(cfg.WorkerNum() * 2),

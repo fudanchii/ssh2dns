@@ -100,7 +100,7 @@ type ClientPool struct {
 	signer ssh.Signer
 }
 
-func NewClientPool(cfg *config.AppConfig) (*ClientPool, error) {
+func NewClientPool(cfg *config.AppConfig) (recdns.DNSClientPool, error) {
 	signer, err := newSigner(cfg.PrivKeyFile())
 	if err != nil {
 		return nil, err
