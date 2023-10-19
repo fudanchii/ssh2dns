@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/fudanchii/ssh2dns/internal/config"
@@ -17,8 +18,18 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+const (
+	maxErrThreshold = 5
+)
+
+var (
+	errResetErrCount = fmt.Errorf("reset")
+	errReconnecting  = fmt.Errorf("reconnecting")
+)
+
 type Client struct {
 	*ssh.Client
+	errLoopBack chan<- error
 }
 
 func (cli *Client) DialTCPWithContext(ctx context.Context, addr string) (net.Conn, error) {
@@ -50,7 +61,7 @@ func (cli *Client) DialTCPWithContext(ctx context.Context, addr string) (net.Con
 	}
 }
 
-func createNewClient(cfg *config.AppConfig, signer ssh.Signer) puddle.Constructor[recdns.DNSClient] {
+func createNewClient(cfg *config.AppConfig, signer ssh.Signer, echan chan<- error) puddle.Constructor[recdns.DNSClient] {
 	return func(_ context.Context) (recdns.DNSClient, error) {
 		client, err := ssh.Dial("tcp", cfg.RemoteAddr(), &ssh.ClientConfig{
 			User:            cfg.RemoteUser(),
@@ -69,7 +80,10 @@ func createNewClient(cfg *config.AppConfig, signer ssh.Signer) puddle.Constructo
 		}
 
 		log.Info("connected to " + cfg.RemoteAddr())
-		return &Client{client}, nil
+		return &Client{
+			Client:      client,
+			errLoopBack: echan,
+		}, nil
 	}
 }
 
@@ -95,9 +109,11 @@ func newSigner(pkfile string) (ssh.Signer, error) {
 }
 
 type ClientPool struct {
-	pool   *puddle.Pool[recdns.DNSClient]
-	config *config.AppConfig
-	signer ssh.Signer
+	pool         *puddle.Pool[recdns.DNSClient]
+	config       *config.AppConfig
+	signer       ssh.Signer
+	errCounter   atomic.Uint32
+	reconnecting atomic.Bool
 }
 
 func NewClientPool(cfg *config.AppConfig) (recdns.DNSClientPool, error) {
@@ -106,8 +122,10 @@ func NewClientPool(cfg *config.AppConfig) (recdns.DNSClientPool, error) {
 		return nil, err
 	}
 
+	echan := make(chan error, maxErrThreshold)
+
 	ppool, err := puddle.NewPool(&puddle.Config[recdns.DNSClient]{
-		Constructor: createNewClient(cfg, signer),
+		Constructor: createNewClient(cfg, signer, echan),
 		Destructor:  dropClient,
 		MaxSize:     int32(cfg.WorkerNum()),
 	})
@@ -126,14 +144,62 @@ func NewClientPool(cfg *config.AppConfig) (recdns.DNSClientPool, error) {
 	}
 	cli.Release()
 
-	return &ClientPool{
-		pool:   ppool,
-		signer: signer,
-		config: cfg,
-	}, nil
+	cp := &ClientPool{
+		pool:         ppool,
+		signer:       signer,
+		config:       cfg,
+		errCounter:   atomic.Uint32{},
+		reconnecting: atomic.Bool{},
+	}
+
+	go cp.trackErrLoopback(echan)
+
+	return cp, nil
+}
+
+func (cp *ClientPool) trackErrLoopback(echan <-chan error) {
+	for err := range echan {
+		if cp.reconnecting.Load() {
+			continue
+		}
+
+		if err == errResetErrCount {
+			cp.errCounter.Store(0)
+			continue
+		}
+
+		cp.errCounter.Add(1)
+		if cp.errCounter.CompareAndSwap(maxErrThreshold, 0) {
+			log.Info("error threshold reached, reset connection pool...")
+			cp.pool.Reset()
+			cp.reconnecting.Store(true)
+
+			// try reconnect
+			for {
+				log.Info("reconnecting...")
+				ctx, cancel := context.WithTimeout(context.TODO(), 5*time.Second)
+				cli, err := cp.pool.Acquire(ctx)
+				cancel()
+
+				if err == nil {
+					cli.Release()
+					cp.reconnecting.Store(false)
+					log.Info("reconnected!")
+					break
+				}
+
+				log.Err(fmt.Sprintf("error when reconnecting: %s", err.Error()))
+				time.Sleep(3 * time.Second)
+			}
+		}
+	}
 }
 
 func (cp *ClientPool) Acquire(ctx context.Context) (recdns.PoolItemWrapper[recdns.DNSClient], error) {
+	if cp.reconnecting.Load() {
+		log.Info("cannot acquire new connection, wait until reconnected...")
+		return nil, errReconnecting
+	}
 	return cp.pool.Acquire(ctx)
 }
 

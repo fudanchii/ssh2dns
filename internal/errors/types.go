@@ -77,6 +77,10 @@ func (d DNSDialErr) Error() string {
 	return fmt.Sprintf("error dialing DNS: %s", d.Cause.Error())
 }
 
+func (d DNSDialErr) Is(another error) bool {
+	return another == DNSDialErr{}
+}
+
 type DNSWriteErr DNSConnectionError
 
 func (d DNSWriteErr) Error() string {

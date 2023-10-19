@@ -10,7 +10,9 @@ import (
 func (sshCli *Client) ExchangeWithContext(ctx context.Context, req *dns.Msg, srv string) (*dns.Msg, error) {
 	conn, err := sshCli.DialTCPWithContext(ctx, srv)
 	if err != nil {
-		return nil, errors.DNSDialErr{Cause: err}
+		retErr := errors.DNSDialErr{Cause: err}
+		go func() { sshCli.errLoopBack <- retErr }()
+		return nil, retErr
 	}
 
 	defer conn.Close()
@@ -24,6 +26,8 @@ func (sshCli *Client) ExchangeWithContext(ctx context.Context, req *dns.Msg, srv
 	if err != nil {
 		return nil, errors.DNSReadErr{Cause: err}
 	}
+
+	go func() { sshCli.errLoopBack <- errResetErrCount }()
 
 	return rspMsg, nil
 }
