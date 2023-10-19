@@ -173,28 +173,31 @@ func (cp *ClientPool) trackErrLoopback(echan <-chan error) {
 		}
 
 		cp.errCounter.Add(1)
-		if cp.errCounter.CompareAndSwap(maxErrThreshold, 0) {
-			log.Info("error threshold reached, reset connection pool...")
-			cp.pool.Reset()
-			cp.reconnecting.Store(true)
+		if cp.errCounter.Load() >= maxErrThreshold {
+			go func() {
+				log.Info("error threshold reached, reset connection pool...")
+				cp.pool.Reset()
+				cp.reconnecting.Store(true)
 
-			// try reconnect
-			for {
-				log.Info("reconnecting...")
-				ctx, cancel := context.WithTimeout(context.TODO(), recdns.DefaultTimeout)
-				cli, err := cp.pool.Acquire(ctx)
-				cancel()
+				// try reconnect
+				for {
+					log.Info("reconnecting...")
+					ctx, cancel := context.WithTimeout(context.TODO(), recdns.DefaultTimeout)
+					cli, err := cp.pool.Acquire(ctx)
+					cancel()
 
-				if err == nil {
-					cli.Release()
-					cp.reconnecting.Store(false)
-					log.Info("reconnected!")
-					break
+					if err == nil {
+						cli.Release()
+						cp.reconnecting.Store(false)
+						log.Info("reconnected!")
+						cp.errCounter.Store(0)
+						break
+					}
+
+					log.Err(fmt.Sprintf("error when reconnecting: %s", err.Error()))
+					time.Sleep(sleepDuration)
 				}
-
-				log.Err(fmt.Sprintf("error when reconnecting: %s", err.Error()))
-				time.Sleep(sleepDuration)
-			}
+			}()
 		}
 	}
 }
