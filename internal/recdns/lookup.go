@@ -23,7 +23,7 @@ type LookupCoordinator struct {
 }
 
 var (
-	defaultTimeout time.Duration = time.Duration(5) * time.Second
+	DefaultTimeout time.Duration = time.Duration(5) * time.Second
 )
 
 func New(cfg *config.AppConfig, clientPool DNSClientPool) *LookupCoordinator {
@@ -143,14 +143,14 @@ func (lc *LookupCoordinator) useNextNS(ctx context.Context, msg *dns.Msg, respon
 func (lc *LookupCoordinator) Handle(msg *dns.Msg) (*dns.Msg, error) {
 	errChan := make(chan error, 1)
 	msgChan := make(chan *dns.Msg, 1)
-	ctx, cancel := context.WithTimeout(context.TODO(), defaultTimeout)
+	ctx, cancel := context.WithTimeout(context.TODO(), DefaultTimeout)
 	defer cancel()
 
 	fallbackLookup := func(err error) (*dns.Msg, error) {
 		if err != nil && !lc.recursive {
 			return nil, err
 		}
-		ctx, cancel := context.WithTimeout(context.TODO(), defaultTimeout)
+		ctx, cancel := context.WithTimeout(context.TODO(), DefaultTimeout)
 		defer cancel()
 		answer, err := lc.handleRecursive(ctx, msg, lc.fallbackTargetNS)
 		if err != nil {

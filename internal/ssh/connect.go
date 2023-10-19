@@ -134,7 +134,7 @@ func NewClientPool(cfg *config.AppConfig) (recdns.DNSClientPool, error) {
 		return nil, err
 	}
 
-	initCtx, cancel := context.WithTimeout(context.TODO(), 5*time.Second)
+	initCtx, cancel := context.WithTimeout(context.TODO(), recdns.DefaultTimeout)
 	defer cancel()
 
 	// try connecting first, bailout if we can't connect at init
@@ -158,6 +158,10 @@ func NewClientPool(cfg *config.AppConfig) (recdns.DNSClientPool, error) {
 }
 
 func (cp *ClientPool) trackErrLoopback(echan <-chan error) {
+	var (
+		sleepDuration time.Duration = 3 * time.Second
+	)
+
 	for err := range echan {
 		if cp.reconnecting.Load() {
 			continue
@@ -177,7 +181,7 @@ func (cp *ClientPool) trackErrLoopback(echan <-chan error) {
 			// try reconnect
 			for {
 				log.Info("reconnecting...")
-				ctx, cancel := context.WithTimeout(context.TODO(), 5*time.Second)
+				ctx, cancel := context.WithTimeout(context.TODO(), recdns.DefaultTimeout)
 				cli, err := cp.pool.Acquire(ctx)
 				cancel()
 
@@ -189,7 +193,7 @@ func (cp *ClientPool) trackErrLoopback(echan <-chan error) {
 				}
 
 				log.Err(fmt.Sprintf("error when reconnecting: %s", err.Error()))
-				time.Sleep(3 * time.Second)
+				time.Sleep(sleepDuration)
 			}
 		}
 	}
