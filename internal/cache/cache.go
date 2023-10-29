@@ -70,9 +70,14 @@ func (cache *Cache) Set(req *dns.Msg, msg *dns.Msg) {
 
 	firstSection := getFirstAvailableSection(msg)
 
+	ttl := firstSection.Header().Ttl
+	if ttl < 180 {
+		ttl = 180
+	}
+
 	cache.rc.Set(keying(req), dnsCacheContent{
 		Ts:     time.Now(),
-		Ttl:    time.Duration(firstSection.Header().Ttl),
+		Ttl:    time.Duration(ttl),
 		Answer: msg.Answer,
 		Ns:     msg.Ns,
 		Extra:  msg.Extra,
